@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYS.LINK - Retro Multiplayer Clicker</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Load Lucide Icons (Used for UI elements) using UMD for global access -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <script>
+        // After the script loads, the global 'lucide' object containing 'createIcons' is available.
+        // We expose it to the window object so the module code can access it.
+        window.createIcons = lucide.createIcons;
+    </script>
+    <style>
+        /* Injecting Font Import directly into the component's style block */
+        @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+        
+        .font-retro { font-family: 'Press Start 2P', cursive; }
+        
+        /* Custom Keyframes */
+        @keyframes float-up {
+          0% { transform: translateY(0); opacity: 1; }
+          100% { transform: translateY(-50px); opacity: 0; }
+        }
+        @keyframes flicker {
+          0%, 100% { opacity: 0.05; }
+          50% { opacity: 0.1; }
+          52% { opacity: 0.05; }
+          54% { opacity: 0.15; }
+          56% { opacity: 0.05; }
+          58% { opacity: 0.2; }
+        }
+        @keyframes pulse-glow {
+          0%, 100% { text-shadow: 0 0 5px #a7f3d0, 0 0 10px #4ade80; }
+          50% { text-shadow: 0 0 10px #86efac, 0 0 30px #a3e635; }
+        }
+        @keyframes slide-down {
+            from { transform: translateY(-100%) translateX(-50%); opacity: 0; }
+            to { transform: translateY(0) translateX(-50%); opacity: 1; }
+        }
+        
+        .animate-float-up { animation: float-up 0.8s ease-out forwards; }
+        .animate-flicker { animation: flicker 4s infinite; }
+        .animate-pulse-glow { animation: pulse-glow 2s infinite; }
+        .animate-slide-down { animation: slide-down 0.5s cubic-bezier(0.25, 1, 0.5, 1); }
+
+        /* CRT Overlay - Scanlines and Glitch */
+        .retro-overlay {
+            pointer-events: none;
+            position: fixed;
+            inset: 0;
+            z-index: 50;
+            overflow: hidden;
+            height: 100%;
+            width: 100%;
+        }
+        .scanlines {
+            position: absolute;
+            inset: 0;
+            background: 
+                linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.4) 50%),
+                linear-gradient(90deg, rgba(0,255,0,0.06), rgba(0,0,255,0.02), rgba(255,0,0,0.06));
+            background-size: 100% 3px, 3px 100%;
+            opacity: 0.7;
+            mix-blend-mode: overlay;
+        }
+        .vignette {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, transparent 50%, rgba(0,0,0,0.6) 100%);
+        }
+
+        /* Custom Scrollbar for Retro Feel */
+        .retro-scrollbar::-webkit-scrollbar { width: 8px; }
+        .retro-scrollbar::-webkit-scrollbar-track { background: #020617; }
+        .retro-scrollbar::-webkit-scrollbar-thumb { background: #65a30d; border-radius: 4px; }
+        .retro-scrollbar::-webkit-scrollbar-thumb:hover { background: #bef264; }
+
+        /* Custom Cursors */
+        .cursor-pointer-retro { cursor: pointer; }
+        .cursor-crosshair-retro { cursor: crosshair; }
+    </style>
+</head>
+<body class="min-h-screen bg-slate-950 text-lime-400 font-retro overflow-hidden relative flex flex-col h-screen cursor-default">
+
+    <!-- Retro Overlay Container -->
+    <div class="retro-overlay">
+        <div class="scanlines"></div>
+        <div class="absolute inset-0 bg-white opacity-[0.03] animate-flicker pointer-events-none mix-blend-overlay"></div>
+        <div class="vignette"></div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container"></div>
+
+    <!-- Main Application Container -->
+    <div id="app-container" class="flex-1 flex flex-col">
+        <!-- Content will be injected here by JavaScript -->
+        <div class="flex-1 flex items-center justify-center">
+            <h1 class="text-2xl text-lime-300 mb-4 animate-pulse-glow">SYSTEM INITIATING...</h1>
+        </div>
+    </div>
+
+    <script type="module">
+        // Import Firebase SDKs
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- Globals ---
+        let app, db, auth;
+        let userId = null;
+        let authReady = false;
+        let hasJoined = false;
+        let username = '';
+        let loading = true;
+
+        // Game State
+        let score = 0;
+        let cps = 0;
+        let inventory = {};
+        let unlockedTrophies = [];
+        let particles = [];
+        let leaderboard = [];
+        let globalTotal = 0;
+        let chatMessages = [];
+        let clockInterval;
+        let gameLoopInterval;
+        let syncInterval;
+        let unsavedChanges = false;
+        let currentRightTab = 'upgrades';
+        let currentLeftTab = 'leaderboard';
+
+        const APP_ID = (typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id').split('/')[0];
+        const INITIAL_AUTH_TOKEN = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+        const FIREBASE_CONFIG = (() => {
+            try {
+                return JSON.parse(typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}');
+            } catch {
+                console.error("Failed to parse firebase config.");
+                return {};
+            }
+        })();
+
+        // --- Constants ---
+        const UPGRADES = [
+          { id: 'cursor', name: 'Auto-Clicker', cps: 1, baseCost: 15, icon: 'MousePointer2' },
+          { id: 'floppy', name: 'Floppy Disk', cps: 5, baseCost: 100, icon: 'Disc' },
+          { id: 'modem', name: '56k Modem', cps: 20, baseCost: 500, icon: 'Wifi' },
+          { id: 'crt', name: 'CRT Monitor', cps: 50, baseCost: 2000, icon: 'Terminal' },
+          { id: 'server', name: 'Mainframe', cps: 150, baseCost: 10000, icon: 'HardDrive' },
+          { id: 'ai', name: 'AI Core', cps: 500, baseCost: 50000, icon: 'Cpu' },
+          { id: 'quantum', name: 'Quantum Svr', cps: 1500, baseCost: 250000, icon: 'Zap' },
+          { id: 'botnet', name: 'Global Botnet', cps: 5000, baseCost: 1000000, icon: 'Globe' },
+        ];
+        
+        const TROPHIES = [
+          { id: 'hello_world', name: 'Hello World', description: 'Click 1 time', condition: (s, c, i) => s >= 1 },
+          { id: 'script_kiddie', name: 'Script Kiddie', description: 'Reach 1,000 Bytes', condition: (s, c, i) => s >= 1000 },
+          { id: 'hacker', name: 'Hacker', description: 'Reach 100 CPS', condition: (s, c, i) => c >= 100 },
+          { id: 'sysadmin', name: 'Sysadmin', description: 'Own a Mainframe', condition: (s, c, i) => i['server'] >= 1 },
+          { id: 'singularity', name: 'Singularity', description: 'Reach 1M Bytes', condition: (s, c, i) => s >= 1000000 },
+          { id: 'overlord', name: 'Net Overlord', description: 'Reach 5,000 CPS', condition: (s, c, i) => c >= 5000 },
+        ];
+
+
+        // --- Utility Functions ---
+
+        const formatNumber = (num) => {
+            num = Math.floor(num);
+            if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+            if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+            return num.toString();
+        };
+
+        const calculateCost = (baseCost, count) => {
+            return Math.floor(baseCost * Math.pow(1.15, count));
+        };
+
+        const getCollectionPath = (type) => {
+            return `artifacts/${APP_ID}/public/data/${type}`;
+        };
+
+        const showNotification = (message) => {
+            const container = document.getElementById('notification-container');
+            const element = document.createElement('div');
+            element.className = 'absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-lime-900/90 text-lime-100 px-6 py-4 border-2 border-lime-400 shadow-[0_0_20px_rgba(163,230,53,0.5)] animate-slide-down flex items-center gap-3';
+            element.innerHTML = `
+                <i data-lucide="Trophy" class="text-yellow-400"></i>
+                <span>${message}</span>
+            `;
+            container.appendChild(element);
+            if (window.createIcons) window.createIcons(); // Initialize Lucide icon
+
+            setTimeout(() => {
+                element.remove();
+            }, 3000);
+        };
+        
+        // --- Game Logic ---
+
+        const checkTrophies = () => {
+            let newUnlock = false;
+            const newTrophies = [...unlockedTrophies];
+
+            TROPHIES.forEach(trophy => {
+                if (!unlockedTrophies.includes(trophy.id)) {
+                    if (trophy.condition(score, cps, inventory)) {
+                        newTrophies.push(trophy.id);
+                        showNotification(`TROPHY UNLOCKED: ${trophy.name}`);
+                        newUnlock = true;
+                    }
+                }
+            });
+
+            if (newUnlock) {
+                unlockedTrophies = newTrophies;
+                unsavedChanges = true;
+                renderRightPanel();
+            }
+        };
+
+        const gameLoop = () => {
+            if (cps > 0) {
+                score += cps;
+                unsavedChanges = true;
+                updateStats();
+                checkTrophies();
+            }
+        };
+
+        const syncData = async () => {
+            if (!userId || !hasJoined || !db || !unsavedChanges) return;
+
+            try {
+                const userDocRef = doc(db, getCollectionPath('scores'), userId);
+                await setDoc(userDocRef, {
+                    username: username,
+                    score: score,
+                    cps: cps,
+                    inventory: inventory,
+                    trophies: unlockedTrophies,
+                    lastUpdated: serverTimestamp()
+                }, { merge: true });
+                unsavedChanges = false;
+            } catch (e) {
+                console.error("Sync failed", e);
+            }
+        };
+
+        // --- Core Actions ---
+
+        window.handleClick = (event) => {
+            const button = event.currentTarget;
+            const rect = button.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+
+            // Particle effect (simple version)
+            const particleId = Date.now();
+            const particleElement = document.createElement('div');
+            particleElement.className = 'absolute text-lime-400 font-bold pointer-events-none select-none animate-float-up text-xl z-20';
+            particleElement.style.left = `${x}px`;
+            particleElement.style.top = `${y}px`;
+            particleElement.textContent = '+1';
+            button.appendChild(particleElement);
+            setTimeout(() => particleElement.remove(), 800);
+
+            score += 1;
+            unsavedChanges = true;
+            updateStats();
+            checkTrophies();
+        };
+
+        window.buyUpgrade = (upgradeId) => {
+            const upgrade = UPGRADES.find(u => u.id === upgradeId);
+            if (!upgrade) return;
+
+            const currentCount = inventory[upgradeId] || 0;
+            const cost = calculateCost(upgrade.baseCost, currentCount);
+
+            if (score >= cost) {
+                score -= cost;
+                inventory[upgradeId] = currentCount + 1;
+                cps += upgrade.cps;
+                unsavedChanges = true;
+                updateStats();
+                renderRightPanel();
+                checkTrophies();
+            }
+        };
+
+        window.handleJoin = async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('username-input');
+            const newUsername = input.value.trim();
+            if (!newUsername || !userId) return;
+
+            username = newUsername;
+            
+            // Restore data if exists
+            const existingData = leaderboard.find(p => p.id === userId);
+            if (existingData) {
+               score = existingData.score || 0;
+               cps = existingData.cps || 0;
+               inventory = existingData.inventory || {};
+               unlockedTrophies = existingData.trophies || [];
+            }
+            
+            hasJoined = true;
+            unsavedChanges = true;
+            renderApp();
+            
+            // Start loops after joining
+            if (!gameLoopInterval) {
+                gameLoopInterval = setInterval(gameLoop, 1000);
+            }
+            if (!syncInterval) {
+                syncInterval = setInterval(syncData, 2000);
+            }
+        };
+
+        window.sendMessage = async (e) => {
+            e.preventDefault();
+            const input = document.getElementById('message-input');
+            const messageText = input.value.trim();
+            if (!messageText || !userId || !db) return;
+
+            try {
+                await addDoc(collection(db, getCollectionPath('chat')), {
+                    username: username,
+                    text: messageText,
+                    timestamp: serverTimestamp()
+                });
+                input.value = '';
+            } catch (err) {
+                console.error("Failed to send message:", err);
+            }
+        };
+        
+        window.setLeftTab = (tab) => {
+            currentLeftTab = tab;
+            renderLeftPanel();
+        };
+
+        window.setRightTab = (tab) => {
+            currentRightTab = tab;
+            renderRightPanel();
+        };
+
+
+        // --- Render Functions ---
+
+        const updateStats = () => {
+            const scoreElement = document.getElementById('local-storage-value');
+            const cpsElement = document.getElementById('transfer-rate-value');
+            if (scoreElement) scoreElement.textContent = formatNumber(score);
+            if (cpsElement) cpsElement.textContent = formatNumber(cps);
+        };
+
+        const renderLogin = () => {
+            const container = document.getElementById('app-container');
+            container.className = 'flex-1 flex items-center justify-center p-4';
+            container.innerHTML = `
+                <div class="relative z-10 max-w-md w-full bg-slate-900 border-2 border-lime-700 p-8 shadow-[0_0_20px_rgba(163,230,53,0.3)]">
+                  <div class="text-center mb-8">
+                    <h1 class="text-4xl text-lime-300 mb-2 animate-pulse-glow">SYS.LINK</h1>
+                    <p class="text-xs text-lime-700">SECURE TERMINAL UPLINK v2.1</p>
+                  </div>
+
+                  <form onsubmit="window.handleJoin(event)" class="space-y-6">
+                    <div>
+                      <label class="block text-xs uppercase mb-2 text-lime-600">Enter Agent ID</label>
+                      <input
+                        type="text"
+                        id="username-input"
+                        value="${username}"
+                        oninput="username = this.value.trim().substring(0, 12)"
+                        maxlength="12"
+                        class="w-full bg-black border-2 border-lime-800 text-lime-400 p-4 focus:border-lime-400 focus:outline-none focus:shadow-[0_0_15px_rgba(163,230,53,0.3)] transition-all placeholder-lime-900"
+                        placeholder="USER_NAME..."
+                        autofocus
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      id="join-button"
+                      disabled="${!username.trim() || !authReady || !userId}"
+                      class="w-full bg-lime-900/30 border-2 border-lime-600 text-lime-400 p-4 hover:bg-lime-500 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed uppercase tracking-widest cursor-pointer-retro"
+                    >
+                      Initialize Connection
+                    </button>
+                    <div class="text-[8px] text-lime-700 text-center mt-4 break-all">
+                        AGENT UID: ${userId || 'Authenticating...'}
+                    </div>
+                    ${!userId && authReady ? `
+                        <div class="text-[10px] text-center text-red-500/70">
+                            Authentication failed. Cannot connect to shared network.
+                        </div>
+                    ` : ''}
+                  </form>
+                </div>
+            `;
+            // Manually re-enable button if auth state changes after initial render
+            const joinButton = document.getElementById('join-button');
+            if (joinButton) {
+                joinButton.disabled = !username.trim() || !authReady || !userId;
+            }
+        };
+
+        const renderLoader = () => {
+            const container = document.getElementById('app-container');
+            container.className = 'flex-1 flex items-center justify-center p-4';
+            container.innerHTML = `
+                <div class="relative z-10 text-center">
+                    <h1 class="text-2xl text-lime-300 mb-4 animate-pulse-glow">SYSTEM INITIATING...</h1>
+                    <div class="w-12 h-12 border-4 border-lime-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                </div>
+            `;
+        };
+        
+        const renderHeader = () => {
+             return `
+                <header class="relative z-10 border-b-2 border-lime-900 bg-slate-900/80 p-3 md:p-4 flex justify-between items-center backdrop-blur-sm shadow-lg shrink-0">
+                    <div class="flex items-center gap-4">
+                      <div class="w-3 h-3 bg-lime-500 rounded-full animate-ping absolute" />
+                      <div class="w-3 h-3 bg-lime-500 rounded-full relative" />
+                      <div>
+                        <h1 class="text-lg md:text-xl text-lime-400 leading-none">SYS.LINK</h1>
+                        <span class="text-[10px] text-lime-700">NODES: ${leaderboard.length}</span>
+                      </div>
+                    </div>
+                    <div class="text-right">
+                      <div class="text-[10px] md:text-xs text-lime-700">TRAFFIC</div>
+                      <div id="global-total-value" class="text-lime-300 text-sm md:text-base">${formatNumber(globalTotal)} PKTS</div>
+                    </div>
+                </header>
+             `;
+        }
+
+        const renderFooter = () => {
+            const currentTime = new Date();
+            const timeString = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+            return `
+                <footer class="relative z-20 w-full shrink-0 border-t-2 border-lime-700 bg-slate-900/90 p-1 flex justify-between items-center text-xs md:text-sm shadow-[0_-5px_20px_rgba(163,230,53,0.1)]">
+                    <div class="bg-lime-700 hover:bg-lime-600 active:bg-lime-800 transition-colors border-t-2 border-l-2 border-lime-300 border-b-2 border-r-2 border-slate-950 p-1 px-3 text-black font-bold cursor-pointer-retro shadow-md">
+                        S.Y.S
+                    </div>
+
+                    <div class="hidden sm:flex flex-1 mx-4">
+                        <div class="flex items-center gap-2 p-1 px-3 bg-lime-900/40 border-t-2 border-l-2 border-lime-300 border-b-2 border-r-2 border-slate-950 text-lime-300 font-normal shadow-md truncate max-w-full">
+                            <i data-lucide="Activity" class="w-4 h-4"></i>
+                            <span class="text-[10px] md:text-xs truncate">SYS.LINK: Agent ${username} - CPS: ${formatNumber(cps)}</span>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800 border-t-2 border-l-2 border-lime-800 border-b-2 border-r-2 border-lime-950 p-1 px-2 text-lime-500 flex items-center gap-2">
+                        <i data-lucide="Cpu" class="w-4 h-4"></i>
+                        <span id="current-time" class="text-[10px] md:text-xs text-lime-400">${timeString}</span>
+                    </div>
+                </footer>
+            `;
+        }
+        
+        const renderLeaderboard = () => {
+            let html = '<div class="flex-1 overflow-y-auto p-2 space-y-1 retro-scrollbar">';
+            if (!userId) {
+                html += '<div class="p-4 text-xs text-red-500/70 text-center">Connection to Public Feed pending authentication...</div>';
+            } else {
+                leaderboard.forEach((player, idx) => {
+                    const isCurrentUser = player.id === userId;
+                    html += `
+                        <div class="p-2 border border-lime-900/30 flex justify-between items-center ${isCurrentUser ? 'bg-lime-900/30 border-lime-500/50' : ''}">
+                          <div class="flex flex-col overflow-hidden">
+                            <div class="flex items-center gap-2">
+                              <span class="text-xs truncate text-lime-300 max-w-[100px]">${idx + 1}. ${player.username}</span>
+                              ${player.trophies && player.trophies.length > 0 ? `<span class="text-[8px] px-1 bg-yellow-900/30 text-yellow-500 border border-yellow-800/50 rounded">${player.trophies.length}🏆</span>` : ''}
+                            </div>
+                            <span class="text-[10px] text-lime-700">${formatNumber(player.cps || 0)} CPS</span>
+                          </div>
+                          <span class="text-xs text-lime-400 ml-2">${formatNumber(player.score || 0)}</span>
+                        </div>
+                    `;
+                });
+            }
+            html += '</div>';
+            return html;
+        }
+
+        const renderChat = () => {
+            let messagesHtml = chatMessages.map((msg, i) => `
+                <div class="break-words">
+                    <span class="text-[10px] text-lime-600 opacity-70">
+                        ${msg.username || 'Unknown'}:
+                    </span>
+                    <span class="text-xs text-lime-400 ml-2 block bg-lime-900/10 p-1 rounded border border-lime-900/20">
+                        ${msg.text}
+                    </span>
+                </div>
+            `).join('');
+
+            return `
+                <div class="flex-1 flex flex-col overflow-hidden">
+                    <div id="chat-container" class="flex-1 overflow-y-auto p-3 space-y-3 retro-scrollbar">
+                        ${!userId ? '<div class="p-4 text-xs text-red-500/70 text-center">Connection to Public Feed pending authentication...</div>' : messagesHtml}
+                    </div>
+                    <form onsubmit="window.sendMessage(event)" class="p-2 border-t border-lime-900/50 flex gap-2">
+                        <input 
+                            id="message-input"
+                            class="flex-1 bg-black border border-lime-800 text-xs p-2 text-lime-300 focus:outline-none focus:border-lime-500"
+                            placeholder="Transmit..."
+                            ${!userId ? 'disabled' : ''}
+                        />
+                        <button type="submit" ${!userId ? 'disabled' : ''} class="bg-lime-800/30 p-2 border border-lime-700 text-lime-400 hover:bg-lime-700/50 cursor-pointer-retro disabled:opacity-30">
+                            <i data-lucide="Send" class="w-4 h-4"></i>
+                        </button>
+                    </form>
+                </div>
+            `;
+        }
+
+        const renderLeftPanel = () => {
+            const container = document.getElementById('left-panel');
+            if (!container) return;
+
+            container.innerHTML = `
+                <div class="flex border-b border-lime-900 shrink-0">
+                    <button 
+                      onclick="window.setLeftTab('leaderboard')"
+                      class="flex-1 p-3 text-xs flex items-center justify-center gap-2 hover:bg-lime-900/20 ${currentLeftTab === 'leaderboard' ? 'bg-lime-900/30 text-lime-300' : 'text-lime-800'} cursor-pointer-retro"
+                    >
+                      <i data-lucide="Users" class="w-4 h-4"></i> NODES
+                    </button>
+                    <button 
+                      onclick="window.setLeftTab('chat')"
+                      class="flex-1 p-3 text-xs flex items-center justify-center gap-2 hover:bg-lime-900/20 ${currentLeftTab === 'chat' ? 'bg-lime-900/30 text-lime-300' : 'text-lime-800'} cursor-pointer-retro"
+                    >
+                      <i data-lucide="MessageSquare" class="w-4 h-4"></i> COMMS
+                    </button>
+                </div>
+                ${currentLeftTab === 'leaderboard' ? renderLeaderboard() : renderChat()}
+            `;
+            if (window.createIcons) window.createIcons();
+            if (currentLeftTab === 'chat') {
+                const chatContainer = document.getElementById('chat-container');
+                if (chatContainer) {
+                    setTimeout(() => {
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }, 50);
+                }
+            }
+        };
+
+        const renderUpgrades = () => {
+            return UPGRADES.map(upgrade => {
+                const count = inventory[upgrade.id] || 0;
+                const cost = calculateCost(upgrade.baseCost, count);
+                const canAfford = score >= cost;
+                const progressWidth = Math.min(100, (score / cost) * 100);
+
+                return `
+                    <button
+                        onclick="window.buyUpgrade('${upgrade.id}')"
+                        ${!canAfford ? 'disabled' : ''}
+                        class="w-full text-left p-3 border-2 transition-all group relative overflow-hidden ${
+                            canAfford 
+                                ? 'border-lime-700 bg-slate-900 hover:bg-lime-900/20 hover:border-lime-500 cursor-pointer-retro' 
+                                : 'border-slate-800 bg-slate-900/50 text-lime-900 cursor-not-allowed'
+                        }"
+                    >
+                        <div class="flex justify-between items-start relative z-10">
+                          <div class="flex items-center gap-3">
+                            <div class="p-2 bg-slate-800 border border-lime-900/50 rounded ${canAfford ? 'text-lime-400' : 'text-lime-900'}">
+                              <i data-lucide="${upgrade.icon}" class="w-4 h-4"></i>
+                            </div>
+                            <div>
+                              <div class="text-xs ${canAfford ? 'text-lime-300' : 'text-lime-900'}">${upgrade.name}</div>
+                              <div class="text-[10px] text-lime-600"> +${upgrade.cps} CPS </div>
+                            </div>
+                          </div>
+                          <div class="text-right">
+                            <div class="text-xs ${canAfford ? 'text-lime-400' : 'text-red-900'}">${formatNumber(cost)}</div>
+                            <div class="text-[10px] text-lime-800">OWNED: ${count}</div>
+                          </div>
+                        </div>
+                        ${canAfford ? `<div class="absolute bottom-0 left-0 top-0 bg-lime-500/5 transition-all duration-500" style="width: ${progressWidth}%"></div>` : ''}
+                    </button>
+                `;
+            }).join('');
+        };
+
+        const renderTrophies = () => {
+            return TROPHIES.map(trophy => {
+                const isUnlocked = unlockedTrophies.includes(trophy.id);
+                return `
+                    <div 
+                        class="p-3 border-2 flex items-center gap-3 relative overflow-hidden ${isUnlocked ? 'border-yellow-700/50 bg-yellow-900/10' : 'border-slate-800 bg-slate-900/50 opacity-60'}"
+                    >
+                        <div class="p-2 rounded border ${isUnlocked ? 'bg-yellow-900/20 border-yellow-600 text-yellow-400' : 'bg-slate-800 border-slate-700 text-slate-600'}">
+                           <i data-lucide="${isUnlocked ? 'Award' : 'Lock'}" class="w-4 h-4"></i>
+                        </div>
+                        <div>
+                          <div class="text-xs ${isUnlocked ? 'text-yellow-400' : 'text-slate-500'}">${trophy.name}</div>
+                          <div class="text-[10px] text-slate-600">${trophy.description}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        };
+
+        const renderRightPanel = () => {
+            const container = document.getElementById('right-panel-content');
+            if (container) {
+                container.innerHTML = currentRightTab === 'upgrades' ? renderUpgrades() : renderTrophies();
+                if (window.createIcons) window.createIcons(); // Re-render icons
+            }
+        };
+
+        const renderApp = () => {
+            const container = document.getElementById('app-container');
+            container.className = 'relative z-10 flex-1 flex flex-col md:flex-row overflow-hidden';
+            container.innerHTML = `
+                ${renderHeader()}
+                <main class="relative z-10 flex-1 flex flex-col md:flex-row overflow-hidden">
+                    
+                    <!-- Left Panel: Leaderboard & Chat -->
+                    <aside id="left-panel" class="hidden md:flex flex-col w-72 border-r-2 border-lime-900 bg-slate-900/50"></aside>
+
+                    <!-- Center: The Game -->
+                    <section class="flex-1 flex flex-col relative min-w-0">
+                      
+                      <!-- Stats Bar -->
+                      <div class="flex justify-around p-4 md:p-6 bg-slate-900/30 shrink-0">
+                        <div class="text-center">
+                          <div class="text-[10px] md:text-xs text-lime-700 mb-1">LOCAL STORAGE</div>
+                          <div id="local-storage-value" class="text-2xl md:text-5xl text-lime-400 animate-pulse-glow">${formatNumber(score)}</div>
+                          <div class="text-[8px] md:text-[10px] text-lime-600 mt-1">BYTES</div>
+                        </div>
+                        <div class="text-center">
+                          <div class="text-[10px] md:text-xs text-lime-700 mb-1">TRANSFER RATE</div>
+                          <div id="transfer-rate-value" class="text-xl md:text-3xl text-lime-300">${formatNumber(cps)}</div>
+                          <div class="text-[8px] md:text-[10px] text-lime-600 mt-1">B/SEC</div>
+                        </div>
+                      </div>
+
+                      <!-- Click Area -->
+                      <div class="flex-1 flex items-center justify-center p-8 select-none overflow-hidden relative">
+                        <button 
+                          onclick="window.handleClick(event)"
+                          class="relative group active:scale-95 transition-transform duration-75 outline-none z-30 cursor-crosshair-retro"
+                        >
+                          <div class="absolute inset-0 bg-lime-500 blur-[50px] opacity-20 group-hover:opacity-30 transition-opacity rounded-full pointer-events-none" />
+                          <div class="relative w-48 h-48 md:w-64 md:h-64 bg-slate-900 border-4 border-lime-500 rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(163,230,53,0.3)] group-hover:shadow-[0_0_50px_rgba(163,230,53,0.5)] group-hover:border-lime-400 transition-all overflow-visible">
+                            <div class="text-lime-500 group-hover:text-lime-300 transition-colors pointer-events-none">
+                              <i data-lucide="Terminal" class="w-16 h-16 md:w-24 md:h-24"></i>
+                            </div>
+                          </div>
+                          <div class="absolute -bottom-12 left-0 right-0 text-center text-xs text-lime-700 animate-pulse pointer-events-none">
+                            [ CLICK TO MINE ]
+                          </div>
+                        </button>
+                      </div>
+
+                      <!-- Mobile Tabs Hint -->
+                      <div class="md:hidden p-2 text-center text-[10px] text-lime-800 border-t border-lime-900/30">
+                        Scroll down for upgrades & trophies
+                      </div>
+                    </section>
+
+                    <!-- Right Panel: Upgrades & Trophies -->
+                    <aside class="flex-1 md:w-80 md:flex-none border-t-2 md:border-t-0 md:border-l-2 border-lime-900 bg-slate-900/50 flex flex-col h-1/2 md:h-auto overflow-hidden">
+                        <div class="flex border-b border-lime-900 shrink-0">
+                            <button 
+                              onclick="window.setRightTab('upgrades')"
+                              class="flex-1 p-3 text-xs flex items-center justify-center gap-2 hover:bg-lime-900/20 ${currentRightTab === 'upgrades' ? 'bg-lime-900/30 text-lime-300' : 'text-lime-800'} cursor-pointer-retro"
+                            >
+                              <i data-lucide="Trophy" class="w-4 h-4"></i> UPGRADES
+                            </button>
+                            <button 
+                              onclick="window.setRightTab('trophies')"
+                              class="flex-1 p-3 text-xs flex items-center justify-center gap-2 hover:bg-lime-900/20 ${currentRightTab === 'trophies' ? 'bg-lime-900/30 text-lime-300' : 'text-lime-800'} cursor-pointer-retro"
+                            >
+                              <i data-lucide="Award" class="w-4 h-4"></i> TROPHIES
+                            </button>
+                        </div>
+                        <div id="right-panel-content" class="flex-1 overflow-y-auto p-4 space-y-3 pb-20 md:pb-4 retro-scrollbar">
+                            <!-- Content injected here -->
+                        </div>
+                    </aside>
+                </main>
+                ${renderFooter()}
+            `;
+            // Initial render of panels and icons
+            renderLeftPanel();
+            renderRightPanel();
+            if (window.createIcons) window.createIcons();
+        };
+
+        // --- Firebase Initialization and Auth ---
+
+        const startFirestoreListeners = () => {
+            if (!db || !userId) {
+                console.error("Cannot start listeners: DB or userId is missing.");
+                return;
+            }
+            
+            console.log("Starting Firestore Listeners with confirmed User ID:", userId);
+
+            // Leaderboard Listener
+            const scoresRef = collection(db, getCollectionPath('scores'));
+            onSnapshot(scoresRef, (snapshot) => {
+                const players = [];
+                let total = 0;
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    players.push({ id: doc.id, ...data });
+                    total += (data.score || 0);
+                });
+                players.sort((a, b) => (b.score || 0) - (a.score || 0));
+                leaderboard = players;
+                globalTotal = total;
+                if (hasJoined) {
+                    renderLeftPanel(); // Update leaderboard tab
+                    document.getElementById('global-total-value').textContent = formatNumber(globalTotal) + ' PKTS';
+                }
+            }, (error) => {
+                console.error("[CONSOLE_ERROR] Leaderboard snapshot error:", error.message);
+                // The error is now caught here after successful sign-in attempt
+            });
+
+            // Chat Listener
+            const chatRef = collection(db, getCollectionPath('chat'));
+            // Use a query to limit messages if desired, but for simplicity, we'll sort/slice later
+            onSnapshot(query(chatRef), (snapshot) => {
+                const messages = [];
+                snapshot.forEach(doc => messages.push({ id: doc.id, ...doc.data() }));
+                
+                messages.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
+                chatMessages = messages.slice(-50);
+                
+                if (hasJoined) {
+                    renderLeftPanel(); // Update chat tab
+                }
+            }, (error) => {
+                console.error("[CONSOLE_ERROR] Chat snapshot error:", error.message);
+                // The error is now caught here after successful sign-in attempt
+            });
+        };
+
+        const initFirebaseAndAuth = async () => {
+            if (Object.keys(FIREBASE_CONFIG).length === 0) {
+                console.error("Firebase config is empty. Cannot initialize.");
+                loading = false;
+                renderLogin();
+                return;
+            }
+
+            try {
+                app = initializeApp(FIREBASE_CONFIG);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                setLogLevel('debug');
+
+                onAuthStateChanged(auth, (currentUser) => {
+                    if (currentUser) {
+                        userId = currentUser.uid;
+                        console.log("Authentication successful, UID:", userId);
+                        // CRITICAL FIX: Start listeners *only* once userId is confirmed
+                        startFirestoreListeners();
+                    } else {
+                        userId = null;
+                        console.log("No user signed in.");
+                    }
+                    authReady = true;
+                    loading = false;
+                    
+                    // Always try to render the current state (login or game)
+                    if (hasJoined) {
+                        renderApp();
+                    } else {
+                        renderLogin();
+                    }
+                });
+
+                // Attempt Custom Token sign-in first, then Anonymous
+                if (INITIAL_AUTH_TOKEN) {
+                    await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
+                    console.log("Signed in with custom token.");
+                } else if (!auth.currentUser) {
+                    await signInAnonymously(auth);
+                    console.log("Signed in anonymously.");
+                }
+
+            } catch (e) {
+                console.error("Firebase initialization or sign-in failed:", e);
+                loading = false;
+                authReady = true; // Still ready, just failed
+                renderLogin();
+            }
+        };
+
+        // --- Main Initialization ---
+        
+        window.onload = function () {
+            renderLoader();
+            initFirebaseAndAuth();
+
+            // Clock interval for footer
+            clockInterval = setInterval(() => {
+                const clockElement = document.getElementById('current-time');
+                if (clockElement) {
+                    const currentTime = new Date();
+                    clockElement.textContent = currentTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+                }
+            }, 1000);
+        };
+
+    </script>
+</body>
+</html>
