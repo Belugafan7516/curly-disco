@@ -82,7 +82,8 @@
         .cursor-crosshair-retro { cursor: crosshair; }
     </style>
 </head>
-<body class="min-h-screen bg-slate-950 text-lime-400 font-retro overflow-hidden relative flex flex-col h-screen cursor-default">
+<body class="bg-slate-950 text-lime-400 font-retro relative flex flex-col min-h-screen cursor-default">
+    <!-- FIX 1: Removed h-screen and overflow-hidden from body, relying on min-h-screen and content height -->
 
     <!-- Retro Overlay Container -->
     <div class="retro-overlay">
@@ -685,10 +686,11 @@
 
         const renderApp = () => {
             const container = document.getElementById('app-container');
-            container.className = 'relative z-10 flex-1 flex flex-col md:flex-row overflow-hidden';
+            // FIX 2: Removed 'overflow-hidden' on mobile to allow scrolling of the main content stack
+            container.className = 'relative z-10 flex-1 flex flex-col md:flex-row md:overflow-hidden';
             container.innerHTML = `
                 ${renderHeader()}
-                <main class="relative z-10 flex-1 flex flex-col md:flex-row overflow-hidden">
+                <main class="relative z-10 flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
                     
                     <!-- Left Panel: Leaderboard & Chat -->
                     <aside id="left-panel" class="hidden md:flex flex-col w-72 border-r-2 border-lime-900 bg-slate-900/50"></aside>
@@ -711,7 +713,7 @@
                       </div>
 
                       <!-- Click Area -->
-                      <div class="flex-1 flex items-center justify-center p-8 select-none overflow-hidden relative">
+                      <div class="flex-1 flex items-center justify-center p-8 select-none overflow-hidden relative min-h-[50vh]">
                         <button 
                           onclick="window.handleClick(event)"
                           class="relative group active:scale-95 transition-transform duration-75 outline-none z-30 cursor-crosshair-retro"
@@ -730,12 +732,13 @@
 
                       <!-- Mobile Tabs Hint -->
                       <div class="md:hidden p-2 text-center text-[10px] text-lime-800 border-t border-lime-900/30">
-                        Scroll down for upgrades & trophies
+                        Scroll down to access Upgrades and Chat panels.
                       </div>
                     </section>
 
                     <!-- Right Panel: Upgrades & Trophies -->
-                    <aside class="flex-1 md:w-80 md:flex-none border-t-2 md:border-t-0 md:border-l-2 border-lime-900 bg-slate-900/50 flex flex-col h-1/2 md:h-auto overflow-hidden">
+                    <!-- FIX 3: Changed flex-1 h-1/2 to w-full on mobile so it stacks correctly without pushing content off screen -->
+                    <aside class="w-full md:w-80 md:flex-none border-t-2 md:border-t-0 md:border-l-2 border-lime-900 bg-slate-900/50 flex flex-col md:h-auto overflow-hidden">
                         <div class="flex border-b border-lime-900 shrink-0">
                             <button 
                               onclick="window.setRightTab('upgrades')"
