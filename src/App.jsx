@@ -34,8 +34,6 @@ const UPGRADES = [
   { id: 'botnet', name: 'Global Botnet', cps: 5000, baseCost: 1000000, icon: <Globe size={16} /> },
 ];
 
-// Defining a type structure for condition argument to clarify the logic (no explicit TS type annotation used here)
-// (score, cps, inventory)
 const TROPHIES = [
   { id: 'hello_world', name: 'Hello World', description: 'Click 1 time', condition: (s, c, i) => s >= 1 },
   { id: 'script_kiddie', name: 'Script Kiddie', description: 'Reach 1,000 Bytes', condition: (s, c, i) => s >= 1000 },
@@ -44,30 +42,6 @@ const TROPHIES = [
   { id: 'singularity', name: 'Singularity', description: 'Reach 1M Bytes', condition: (s, c, i) => s >= 1000000 },
   { id: 'overlord', name: 'Net Overlord', description: 'Reach 5,000 CPS', condition: (s, c, i) => c >= 5000 },
 ];
-
-// --- Firebase Initialization (Global, then assigned in App) ---
-
-// Use window/global properties provided by the Canvas environment, falling back to safe defaults
-const initialAuthToken = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
-const rawAppId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id';
-const firebaseConfigString = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
-
-// FIX: Sanitize the appId to ensure it only contains a single segment, 
-// preventing the runtime environment's file path context from breaking Firestore's path rules.
-const appId = rawAppId.split('/')[0];
-
-const firebaseConfig = JSON.parse(firebaseConfigString); 
-
-// Initialize Firebase services outside of the component to ensure single instantiation
-let app, auth, db;
-try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  setLogLevel('debug'); // Enable debug logging for troubleshooting
-} catch (e) {
-  console.error("Firebase initialization failed:", e);
-}
 
 // --- Utility Functions ---
 const formatNumber = (num) => {
@@ -93,7 +67,6 @@ const RetroOverlay = () => (
   </div>
 );
 
-// Removed explicit TS type annotation from props to ensure JSX compatibility
 const Particle = ({ x, y, value, onComplete }) => {
   useEffect(() => {
     const timer = setTimeout(onComplete, 1000);
@@ -121,7 +94,7 @@ export default function App() {
   // Game State
   const [score, setScore] = useState(0);
   const [cps, setCps] = useState(0);
-  const [inventory, setInventory] = useState({}); // Use empty object for initial state
+  const [inventory, setInventory] = useState({});
   const [unlockedTrophies, setUnlockedTrophies] = useState([]);
   const [particles, setParticles] = useState([]);
   const [notification, setNotification] = useState(null);
@@ -145,43 +118,94 @@ export default function App() {
   const unsavedChanges = useRef(false);
   const chatContainerRef = useRef(null);
 
+  // Ref for Firebase services (initialized client-side only)
+  const fbRef = useRef({ auth: null, db: null, appId: null });
+
   // --- Firestore Path Helper ---
   const getCollectionPath = useCallback((type) => {
     // Both scores and chat are public data collections
+    const appId = fbRef.current.appId || 'default-app-id';
     return `artifacts/${appId}/public/data/${type}`;
   }, []);
 
-  // --- Auth & Initial Load ---
+  // --- Auth & Initial Load (Client-Side Only) ---
   useEffect(() => {
-    if (!auth || !db) return;
+    // CRITICAL: Ensure this entire block only runs in the browser environment.
+    if (typeof window === 'undefined') {
+      // This path is taken during SSR/build time. We mark loading false
+      // to render the loading screen, but we prevent Firebase init.
+      setLoading(false); 
+      return; 
+    }
     
-    // Listener for Auth State Changes
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        setUserId(currentUser.uid);
-      } else {
-        setUserId(null);
-      }
-      setAuthReady(true); // Auth process is complete
+    // Check if Firebase is already initialized
+    if (fbRef.current.auth) {
       setLoading(false);
-    });
+      return;
+    }
     
-    // Initial sign-in attempt
-    const attemptAuth = async () => {
-      try {
-        if (initialAuthToken) {
-          await signInWithCustomToken(auth, initialAuthToken);
-        } else if (!auth.currentUser) {
-          await signInAnonymously(auth);
+    // 1. Access Canvas Globals
+    // Accessing window.__globals must be inside useEffect
+    const initialAuthToken = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+    const rawAppId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id';
+    const firebaseConfigString = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
+    
+    // The appId can sometimes contain a path element, we only need the base ID
+    const appId = rawAppId.split('/')[0];
+    let firebaseConfig;
+    try {
+      firebaseConfig = JSON.parse(firebaseConfigString); 
+    } catch {
+      console.error("Failed to parse firebase config string.");
+      setLoading(false);
+      return;
+    }
+    
+    // 2. Initialize Firebase
+    try {
+      const app = initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      const db = getFirestore(app);
+      setLogLevel('debug'); 
+      
+      // Store services in ref
+      fbRef.current.auth = auth;
+      fbRef.current.db = db;
+      fbRef.current.appId = appId;
+      
+      // 3. Perform Authentication
+      const attemptAuth = async () => {
+        try {
+          if (initialAuthToken) {
+            await signInWithCustomToken(auth, initialAuthToken);
+          } else if (!auth.currentUser) {
+            await signInAnonymously(auth);
+          }
+        } catch (e) {
+          console.error("Authentication failed during sign-in:", e);
         }
-      } catch (e) {
-        console.error("Authentication failed:", e);
-      }
-    };
+      };
 
-    attemptAuth();
-    return () => unsubscribe(); // Cleanup auth listener
-  }, []); // Empty dependency array means this runs once on mount
+      // 4. Set up Auth Listener
+      const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        if (currentUser) {
+          setUserId(currentUser.uid);
+        } else {
+          setUserId(null);
+        }
+        // Once onAuthStateChanged fires, we know the auth state is stable.
+        setAuthReady(true);
+        setLoading(false); // Stop loading once auth state is determined
+      });
+
+      attemptAuth();
+      return () => unsubscribe(); // Cleanup auth listener
+      
+    } catch (e) {
+      console.error("Firebase initialization failed:", e);
+      setLoading(false);
+    }
+  }, []); // Run once on mount
 
   // --- Sync References ---
   useEffect(() => { scoreRef.current = score; }, [score]);
@@ -191,6 +215,7 @@ export default function App() {
   
   // --- Clock Loop (1s Interval) ---
   useEffect(() => {
+    // This is safe to run client-side
     const timer = setInterval(() => {
         setCurrentTime(new Date());
     }, 1000);
@@ -243,13 +268,14 @@ export default function App() {
 
   // --- Firestore Sync (Debounced 2s) ---
   useEffect(() => {
-    // Only proceed if user is logged in AND has joined the game
-    if (!userId || !hasJoined) return;
+    const dbInstance = fbRef.current.db;
+    // Only proceed if user is logged in AND has joined the game AND DB is initialized
+    if (!userId || !hasJoined || !dbInstance) return;
 
     const syncInterval = setInterval(async () => {
       if (unsavedChanges.current) {
         try {
-          const userDocRef = doc(db, getCollectionPath('scores'), userId);
+          const userDocRef = doc(dbInstance, getCollectionPath('scores'), userId);
           await setDoc(userDocRef, {
             username: username,
             score: scoreRef.current,
@@ -270,11 +296,12 @@ export default function App() {
 
   // --- Listeners (Leaderboard & Chat) ---
   useEffect(() => {
-    // FIX: Auth Guard. Only start listeners once authenticated state is confirmed.
-    if (!authReady || !userId || !db) return;
+    const dbInstance = fbRef.current.db;
+    // CRITICAL: Auth Guard. Only start listeners once authenticated state is confirmed and DB is initialized.
+    if (!authReady || !userId || !dbInstance) return;
 
     // Leaderboard
-    const scoresRef = collection(db, getCollectionPath('scores'));
+    const scoresRef = collection(dbInstance, getCollectionPath('scores'));
     const unsubLeaderboard = onSnapshot(scoresRef, (snapshot) => {
       const players = [];
       let total = 0;
@@ -291,7 +318,7 @@ export default function App() {
     });
 
     // Chat
-    const chatRef = collection(db, getCollectionPath('chat'));
+    const chatRef = collection(dbInstance, getCollectionPath('chat'));
     const unsubChat = onSnapshot(query(chatRef), (snapshot) => {
       const messages = [];
       snapshot.forEach(doc => messages.push({ id: doc.id, ...doc.data() }));
@@ -314,7 +341,7 @@ export default function App() {
       unsubLeaderboard();
       unsubChat();
     };
-  }, [authReady, userId, getCollectionPath]); // Dependencies on auth state
+  }, [authReady, userId, getCollectionPath]); // Dependencies on auth state and path helper
 
   // --- Actions ---
 
@@ -363,10 +390,12 @@ export default function App() {
 
   const sendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !userId) return;
+    const dbInstance = fbRef.current.db;
+
+    if (!newMessage.trim() || !userId || !dbInstance) return;
 
     try {
-      await addDoc(collection(db, getCollectionPath('chat')), {
+      await addDoc(collection(dbInstance, getCollectionPath('chat')), {
         username: username,
         text: newMessage.trim(),
         timestamp: serverTimestamp()
