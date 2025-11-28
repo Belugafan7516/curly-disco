@@ -23,7 +23,6 @@
             height: 100%; 
             margin: 0;
             padding: 0;
-            /* overflow: hidden; rule removed */
         }
         #app-container {
             height: 100%; 
@@ -144,7 +143,6 @@
     <script type="module">
         // Import Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        // ADDED onAuthStateChanged import
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, setLogLevel, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
@@ -152,6 +150,7 @@
         let app, db, auth;
         let userId = null;
         let authReady = false; // CRITICAL: Tracks if auth state has been determined
+        let initialAuthAttempted = false; // Prevents repeated sign-in attempts
         let hasJoined = false;
         let username = '';
         let loading = true;
@@ -171,12 +170,9 @@
         let currentRightTab = 'upgrades';
         let currentLeftTab = 'leaderboard';
 
-        // --- Configuration (Fixed the variable access here) ---
-        // Access global variables safely using typeof checks
+        // --- Configuration ---
         const APP_ID = (typeof __app_id !== 'undefined' ? __app_id : 'default-app-id').split('/')[0];
-        // FIXED: Accessing __initial_auth_token directly via typeof check
-        const INITIAL_AUTH_TOKEN = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        // FIXED: Accessing __firebase_config directly via typeof check
+        let INITIAL_AUTH_TOKEN = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null; // Made mutable
         const PLATFORM_CONFIG_JSON = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
         
         // --- HARDCODED FALLBACK CONFIGURATION (PRIORITY CONFIG) ---
@@ -187,11 +183,10 @@
             storageBucket: "ephemeralencrypt.firebasestorage.app",
             messagingSenderId: "206280993667",
             appId: "1:206280993667:web:23238ec27da6ddd95864b6",
-            measurementId: "G-2LW8KMNBN5"
+            measurementId: "G-2LW8KMNBN6" 
         };
         
         let FIREBASE_CONFIG = {};
-        let usingPlatformToken = false;
 
         // Priority 1: Use the user's hardcoded config if it looks valid
         if (USER_CONFIG_FALLBACK.apiKey && USER_CONFIG_FALLBACK.projectId) {
@@ -204,7 +199,6 @@
                 if (Object.keys(config).length > 0 && config.apiKey && config.projectId) {
                     console.warn("CONFIG: Hardcoded config missing. Falling back to platform-provided configuration.");
                     FIREBASE_CONFIG = config; 
-                    usingPlatformToken = !!INITIAL_AUTH_TOKEN; 
                 }
             } catch (e) {
                 console.error("CONFIG ERROR: Failed to parse platform config.", e);
@@ -302,6 +296,12 @@
                 score += cps;
                 unsavedChanges = true;
                 updateStats();
+                
+                // Refresh the upgrade buttons every second to reflect new affordability
+                if (currentRightTab === 'upgrades') {
+                    renderRightPanel();
+                }
+
                 checkTrophies();
             }
         };
@@ -365,9 +365,15 @@
             score += 1;
             unsavedChanges = true;
             updateStats();
+            
+            // Refresh the upgrade buttons to check affordability after click
+            if (currentRightTab === 'upgrades') {
+                renderRightPanel();
+            }
+            
             checkTrophies();
             
-            console.log("CLICK: Button clicked! Score:", score);
+            // console.log("CLICK: Button clicked! Score:", score);
         };
 
         window.buyUpgrade = (upgradeId) => {
@@ -385,7 +391,8 @@
                 cps += upgrade.cps;
                 unsavedChanges = true;
                 updateStats();
-                renderRightPanel();
+                // This call ensures all upgrade buttons refresh after purchase
+                renderRightPanel(); 
                 checkTrophies();
             }
         };
@@ -403,9 +410,6 @@
             }
 
             username = currentUsername.substring(0, 12);
-            
-            // Data restoration happens during fetchUserData, which is called after auth
-            // This button press marks the user as having 'joined' the session.
             
             hasJoined = true;
             unsavedChanges = true;
@@ -682,21 +686,22 @@
                         class="w-full text-left p-3 border-2 transition-all group relative overflow-hidden ${
                             canAfford && authReady && hasJoined
                                 ? 'border-lime-700 bg-slate-900 hover:bg-lime-900/20 hover:border-lime-500 cursor-pointer-retro' 
-                                : 'border-slate-800 bg-slate-900/50 text-lime-900 cursor-not-allowed'
+                                // Increased visibility for disabled state text
+                                : 'border-slate-800 bg-slate-900/50 text-lime-800 cursor-not-allowed'
                         }"
                     >
                         <div class="flex justify-between items-start relative z-10">
                           <div class="flex items-center gap-3">
-                            <div class="p-2 bg-slate-800 border border-lime-900/50 rounded ${canAfford ? 'text-lime-400' : 'text-lime-900'}">
+                            <div class="p-2 bg-slate-800 border border-lime-900/50 rounded ${canAfford ? 'text-lime-400' : 'text-lime-800'}">
                               <i data-lucide="${upgrade.icon}" class="w-4 h-4"></i>
                             </div>
                             <div>
-                              <div class="text-xs ${canAfford ? 'text-lime-300' : 'text-lime-900'}">${upgrade.name}</div>
+                              <div class="text-xs ${canAfford ? 'text-lime-300' : 'text-lime-800'}">${upgrade.name}</div>
                               <div class="text-[10px] text-lime-600"> +${upgrade.cps} CPS </div>
                             </div>
                           </div>
                           <div class="text-right">
-                            <div class="text-xs ${canAfford ? 'text-lime-400' : 'text-red-900'}">${formatNumber(cost)}</div>
+                            <div class="text-xs ${canAfford ? 'text-lime-400' : 'text-red-700'}">${formatNumber(cost)}</div>
                             <div class="text-[10px] text-lime-800">OWNED: ${count}</div>
                           </div>
                         </div>
@@ -869,6 +874,7 @@
 
             // Leaderboard Listener
             const scoresRef = collection(db, getCollectionPath('scores'));
+            // IMPORTANT: Client-side sorting is used instead of orderBy() to avoid index errors.
             onSnapshot(scoresRef, (snapshot) => {
                 const players = [];
                 let total = 0;
@@ -877,7 +883,7 @@
                     players.push({ id: doc.id, ...data });
                     total += (data.score || 0);
                 });
-                // Client-side sorting to avoid Firestore index requirement error
+                // Client-side sorting
                 players.sort((a, b) => (b.score || 0) - (a.score || 0));
                 leaderboard = players;
                 globalTotal = total;
@@ -909,6 +915,77 @@
             });
         };
 
+        const handleAuthSuccess = async (user) => {
+            // --- SUCCESS: User is signed in and token is ready ---
+            userId = user.uid;
+            authReady = true;
+
+            // 1. Check/restore user data
+            await fetchUserData(userId); 
+            
+            // QOL: Provide a default name if none exists
+            if (!username) {
+                username = 'Agent_' + userId.substring(0, 4);
+            }
+
+            // 2. Start Listeners and Render
+            startFirestoreListeners();
+            loading = false;
+            
+            if (hasJoined && username) { 
+                console.log("RENDER: Rendering main game (Auto-Join).");
+                renderApp();
+            } else {
+                console.log("RENDER: Rendering Login screen (New session/Username needed).");
+                renderLogin();
+            }
+        };
+
+        /** Attempts custom token sign-in, falling back to anonymous if the token fails. */
+        const attemptInitialSignIn = async () => {
+            if (initialAuthAttempted) return;
+            initialAuthAttempted = true;
+
+            // Attempt 1: Custom Token Sign-in
+            if (INITIAL_AUTH_TOKEN) {
+                try {
+                    console.log("AUTH: Attempting custom token sign-in...");
+                    await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
+                    return; // onAuthStateChanged will handle success via handleAuthSuccess
+                } catch (e) {
+                    console.error("AUTH ERROR: Custom token sign-in failed.", e.message, e.code);
+                    
+                    // --- CRITICAL FIX: Explicitly clear the token if mismatch occurred ---
+                    if (e.code === 'auth/custom-token-mismatch') {
+                        console.warn("AUTH FALLBACK: Custom token failed. Clearing token and attempting anonymous sign-in.");
+                        INITIAL_AUTH_TOKEN = null; // Clear the bad token to ensure clean anonymous attempt
+                    } else {
+                        // If it's another critical error, stop here
+                        loading = false;
+                        authReady = true; 
+                        userId = null;
+                        renderLogin();
+                        return;
+                    }
+                }
+            }
+            
+            // Attempt 2: Fallback to Anonymous Sign-in (runs if token was missing or token failed)
+            try {
+                console.log("AUTH FALLBACK: Attempting anonymous sign-in...");
+                await signInAnonymously(auth);
+                // Success: onAuthStateChanged will handle success via handleAuthSuccess
+            } catch (anonError) {
+                console.error("AUTH FATAL: Anonymous sign-in also failed.", anonError);
+                // Set final error state if all else fails
+                loading = false;
+                authReady = true; 
+                userId = null;
+                renderLogin();
+            }
+        };
+
+
         const initFirebaseAndAuth = async () => {
             if (Object.keys(FIREBASE_CONFIG).length === 0) {
                 console.error("FIREBASE INIT ERROR: Config is empty. Cannot initialize.");
@@ -924,48 +1001,20 @@
                 db = getFirestore(app);
                 setLogLevel('debug'); // Enable debug logging
                 console.log("FIREBASE INIT: SDKs initialized.");
-
-                // Use the robust onAuthStateChanged listener
+                
+                // CRITICAL: Set up the listener to *react* to auth status changes
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
-                        // --- SUCCESS: User is signed in and token is ready ---
-                        userId = user.uid;
-                        authReady = true;
-
-                        // 1. Check/restore user data
-                        await fetchUserData(userId); 
-                        
-                        // QOL: Provide a default name if none exists
-                        if (!username) {
-                            username = 'Agent_' + userId.substring(0, 4);
+                        // The user object is present, sign-in was successful (either token or anonymous)
+                        if (!authReady) {
+                            handleAuthSuccess(user);
                         }
-
-                        // 2. Start Listeners and Render
-                        startFirestoreListeners();
-                        loading = false;
-                        
-                        if (hasJoined && username) { 
-                            console.log("RENDER: Rendering main game (Auto-Join).");
-                            renderApp();
-                        } else {
-                            console.log("RENDER: Rendering Login screen (New session/Username needed).");
-                            renderLogin();
-                        }
-
                     } else {
-                        // --- NO USER: Attempt initial sign-in ---
-                        try {
-                            if (INITIAL_AUTH_TOKEN) {
-                                // Attempt sign-in with the platform token
-                                await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
-                            } else {
-                                // Fall back to anonymous sign-in
-                                await signInAnonymously(auth);
-                            }
-                            // Successful sign-in will re-trigger this listener with 'user' object
-                        } catch (e) {
-                            // Sign-in failed (e.g., bad token, network error)
-                            console.error("AUTH ERROR: Sign-in attempt failed.", e);
+                        // User is signed out. This is where we initiate the first sign-in attempt.
+                        if (!initialAuthAttempted) {
+                            await attemptInitialSignIn();
+                        } else if (!authReady) {
+                             // If we've already attempted sign-in and still have no user, show login as failed
                             loading = false;
                             authReady = true; 
                             userId = null;
