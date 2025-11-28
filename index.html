@@ -9,8 +9,7 @@
     <!-- Load Lucide Icons (Used for UI elements) using UMD for global access -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <script>
-        // After the script loads, the global 'lucide' object containing 'createIcons' is available.
-        // We expose it to the window object so the module code can access it.
+        // Expose createIcons globally
         window.createIcons = lucide.createIcons;
     </script>
     <style>
@@ -133,14 +132,37 @@
         let currentRightTab = 'upgrades';
         let currentLeftTab = 'leaderboard';
 
+        // --- Configuration ---
         const APP_ID = (typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id').split('/')[0];
         const INITIAL_AUTH_TOKEN = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+        const PLATFORM_CONFIG_JSON = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
+        
+        // --- HARDCODED FALLBACK CONFIGURATION (REPLACE IF RUNNING OUTSIDE CANVAS) ---
+        // This config is used if the platform-provided configuration is empty.
+        // It now contains the Firebase keys provided by the user.
+        const USER_CONFIG_FALLBACK = {
+            apiKey: "AIzaSyBVxchW1l9DO5vRTnkr9O_CviXhwsnWqs", 
+            authDomain: "ephemeralencrypt.firebaseapp.com",
+            projectId: "ephemeralencrypt",
+            storageBucket: "ephemeralencrypt.firebasestorage.app",
+            messagingSenderId: "206280993667",
+            appId: "1:206280993667:web:23238ec27da6ddd95864b6",
+            measurementId: "G-2LW8KMNBN5"
+        };
+        
         const FIREBASE_CONFIG = (() => {
             try {
-                return JSON.parse(typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}');
-            } catch {
-                console.error("Failed to parse firebase config.");
-                return {};
+                const config = JSON.parse(PLATFORM_CONFIG_JSON);
+                // Check if the platform config is truly empty or invalid
+                if (Object.keys(config).length > 0 && config.apiKey && config.projectId) {
+                    console.log("CONFIG: Using platform-provided Firebase configuration.");
+                    return config;
+                }
+                console.warn("CONFIG: Platform configuration was empty/invalid. Using hardcoded fallback configuration provided by the user.");
+                return USER_CONFIG_FALLBACK;
+            } catch (e) {
+                console.error("CONFIG ERROR: Failed to parse platform config. Using hardcoded fallback.", e);
+                return USER_CONFIG_FALLBACK;
             }
         })();
 
@@ -180,6 +202,7 @@
         };
 
         const getCollectionPath = (type) => {
+            // Public data path: artifacts/{appId}/public/data/{your_collection_name}
             return `artifacts/${APP_ID}/public/data/${type}`;
         };
 
@@ -233,6 +256,7 @@
 
         const syncData = async () => {
             if (!userId || !hasJoined || !db || !unsavedChanges) return;
+            console.log("SYNC: Attempting to save data for user:", userId);
 
             try {
                 const userDocRef = doc(db, getCollectionPath('scores'), userId);
@@ -245,8 +269,9 @@
                     lastUpdated: serverTimestamp()
                 }, { merge: true });
                 unsavedChanges = false;
+                console.log("SYNC: Data saved successfully.");
             } catch (e) {
-                console.error("Sync failed", e);
+                console.error("SYNC ERROR: Failed to save data.", e);
             }
         };
 
@@ -259,7 +284,6 @@
             const y = event.clientY - rect.top;
 
             // Particle effect (simple version)
-            const particleId = Date.now();
             const particleElement = document.createElement('div');
             particleElement.className = 'absolute text-lime-400 font-bold pointer-events-none select-none animate-float-up text-xl z-20';
             particleElement.style.left = `${x}px`;
@@ -296,7 +320,10 @@
             e.preventDefault();
             const input = document.getElementById('username-input');
             const newUsername = input.value.trim();
-            if (!newUsername || !userId) return;
+            if (!newUsername || !userId) {
+                console.warn("JOIN ATTEMPT FAILED: Username is empty or userId is missing.");
+                return;
+            }
 
             username = newUsername;
             
@@ -320,6 +347,7 @@
             if (!syncInterval) {
                 syncInterval = setInterval(syncData, 2000);
             }
+            console.log("JOIN SUCCESS: Game started for user:", username);
         };
 
         window.sendMessage = async (e) => {
@@ -336,7 +364,7 @@
                 });
                 input.value = '';
             } catch (err) {
-                console.error("Failed to send message:", err);
+                console.error("CHAT ERROR: Failed to send message:", err);
             }
         };
         
@@ -363,6 +391,8 @@
         const renderLogin = () => {
             const container = document.getElementById('app-container');
             container.className = 'flex-1 flex items-center justify-center p-4';
+            const disableButton = !username.trim() || !authReady || !userId;
+
             container.innerHTML = `
                 <div class="relative z-10 max-w-md w-full bg-slate-900 border-2 border-lime-700 p-8 shadow-[0_0_20px_rgba(163,230,53,0.3)]">
                   <div class="text-center mb-8">
@@ -387,17 +417,17 @@
                     <button
                       type="submit"
                       id="join-button"
-                      disabled="${!username.trim() || !authReady || !userId}"
+                      disabled="${disableButton}"
                       class="w-full bg-lime-900/30 border-2 border-lime-600 text-lime-400 p-4 hover:bg-lime-500 hover:text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed uppercase tracking-widest cursor-pointer-retro"
                     >
                       Initialize Connection
                     </button>
                     <div class="text-[8px] text-lime-700 text-center mt-4 break-all">
-                        AGENT UID: ${userId || 'Authenticating...'}
+                        AGENT UID: ${userId || (authReady ? 'FAILED/ANON' : 'Authenticating...')}
                     </div>
                     ${!userId && authReady ? `
                         <div class="text-[10px] text-center text-red-500/70">
-                            Authentication failed. Cannot connect to shared network.
+                            Authentication failed or pending. Check console for errors.
                         </div>
                     ` : ''}
                   </form>
@@ -406,7 +436,7 @@
             // Manually re-enable button if auth state changes after initial render
             const joinButton = document.getElementById('join-button');
             if (joinButton) {
-                joinButton.disabled = !username.trim() || !authReady || !userId;
+                joinButton.disabled = disableButton;
             }
         };
 
@@ -702,11 +732,11 @@
 
         const startFirestoreListeners = () => {
             if (!db || !userId) {
-                console.error("Cannot start listeners: DB or userId is missing.");
+                console.error("FIRESTORE ERROR: Cannot start listeners. DB or userId is missing.");
                 return;
             }
             
-            console.log("Starting Firestore Listeners with confirmed User ID:", userId);
+            console.log("FIRESTORE: Starting listeners for User ID:", userId);
 
             // Leaderboard Listener
             const scoresRef = collection(db, getCollectionPath('scores'));
@@ -722,17 +752,17 @@
                 leaderboard = players;
                 globalTotal = total;
                 if (hasJoined) {
-                    renderLeftPanel(); // Update leaderboard tab
+                    renderLeftPanel(); 
                     document.getElementById('global-total-value').textContent = formatNumber(globalTotal) + ' PKTS';
                 }
+                console.log(`FIRESTORE: Leaderboard updated (${players.length} nodes).`);
             }, (error) => {
-                console.error("[CONSOLE_ERROR] Leaderboard snapshot error:", error.message);
-                // The error is now caught here after successful sign-in attempt
+                // This is where security rule errors show up
+                console.error("FIRESTORE ERROR: Leaderboard snapshot failed (Likely Security Rules):", error.message);
             });
 
             // Chat Listener
             const chatRef = collection(db, getCollectionPath('chat'));
-            // Use a query to limit messages if desired, but for simplicity, we'll sort/slice later
             onSnapshot(query(chatRef), (snapshot) => {
                 const messages = [];
                 snapshot.forEach(doc => messages.push({ id: doc.id, ...doc.data() }));
@@ -741,17 +771,18 @@
                 chatMessages = messages.slice(-50);
                 
                 if (hasJoined) {
-                    renderLeftPanel(); // Update chat tab
+                    renderLeftPanel(); 
                 }
+                console.log(`FIRESTORE: Chat updated (${chatMessages.length} messages).`);
             }, (error) => {
-                console.error("[CONSOLE_ERROR] Chat snapshot error:", error.message);
-                // The error is now caught here after successful sign-in attempt
+                // This is where security rule errors show up
+                console.error("FIRESTORE ERROR: Chat snapshot failed (Likely Security Rules):", error.message);
             });
         };
 
         const initFirebaseAndAuth = async () => {
             if (Object.keys(FIREBASE_CONFIG).length === 0) {
-                console.error("Firebase config is empty. Cannot initialize.");
+                console.error("FIREBASE INIT ERROR: Config is empty. Cannot initialize.");
                 loading = false;
                 renderLogin();
                 return;
@@ -762,21 +793,24 @@
                 auth = getAuth(app);
                 db = getFirestore(app);
                 setLogLevel('debug');
+                console.log("FIREBASE INIT: SDKs initialized.");
 
+                // Step 1: Set up the Auth State Listener (CRITICAL)
+                // This is the source of truth for the user's logged-in status.
                 onAuthStateChanged(auth, (currentUser) => {
                     if (currentUser) {
                         userId = currentUser.uid;
-                        console.log("Authentication successful, UID:", userId);
-                        // CRITICAL FIX: Start listeners *only* once userId is confirmed
+                        console.log("AUTH STATE CHANGE: Successful, UID:", userId);
+                        // Start Firestore listeners ONLY when we have a confirmed UID
                         startFirestoreListeners();
                     } else {
                         userId = null;
-                        console.log("No user signed in.");
+                        console.log("AUTH STATE CHANGE: No user signed in (Anonymous or failed).");
                     }
                     authReady = true;
                     loading = false;
                     
-                    // Always try to render the current state (login or game)
+                    // Render the UI state based on readiness
                     if (hasJoined) {
                         renderApp();
                     } else {
@@ -784,17 +818,18 @@
                     }
                 });
 
-                // Attempt Custom Token sign-in first, then Anonymous
+                // Step 2: Attempt Sign-In (using provided token or anonymously)
                 if (INITIAL_AUTH_TOKEN) {
+                    console.log("AUTH ATTEMPT: Signing in with provided custom token...");
                     await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
-                    console.log("Signed in with custom token.");
                 } else if (!auth.currentUser) {
+                    console.log("AUTH ATTEMPT: Signing in anonymously (No custom token provided)...");
                     await signInAnonymously(auth);
-                    console.log("Signed in anonymously.");
                 }
+                // Note: The onAuthStateChanged listener handles the final state update after sign-in completes.
 
             } catch (e) {
-                console.error("Firebase initialization or sign-in failed:", e);
+                console.error("FATAL FIREBASE ERROR: Initialization or sign-in attempt failed.", e);
                 loading = false;
                 authReady = true; // Still ready, just failed
                 renderLogin();
