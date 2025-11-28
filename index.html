@@ -137,11 +137,10 @@
         const INITIAL_AUTH_TOKEN = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
         const PLATFORM_CONFIG_JSON = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
         
-        // --- HARDCODED FALLBACK CONFIGURATION (REPLACE IF RUNNING OUTSIDE CANVAS) ---
-        // This config is used if the platform-provided configuration is empty.
-        // It now contains the Firebase keys provided by the user.
+        // --- HARDCODED FALLBACK CONFIGURATION (PRIORITY CONFIG) ---
+        // This configuration is now prioritized as requested.
         const USER_CONFIG_FALLBACK = {
-            apiKey: "AIzaSyBVxchW1l9DO5vRTnkr9O_CviXhwsnWqs", 
+            apiKey: "AIzaSyBVxchWw1l9DO5vRTnkr9O_CviXhwsnWqs",
             authDomain: "ephemeralencrypt.firebaseapp.com",
             projectId: "ephemeralencrypt",
             storageBucket: "ephemeralencrypt.firebasestorage.app",
@@ -150,21 +149,33 @@
             measurementId: "G-2LW8KMNBN5"
         };
         
-        const FIREBASE_CONFIG = (() => {
+        let FIREBASE_CONFIG = {};
+        let usingPlatformToken = false; // Flag to indicate if we should attempt token sign-in
+
+        // Priority 1: Use the user's hardcoded config if it looks valid
+        if (USER_CONFIG_FALLBACK.apiKey && USER_CONFIG_FALLBACK.projectId) {
+             console.log("CONFIG: Prioritizing hardcoded user configuration as requested.");
+             FIREBASE_CONFIG = USER_CONFIG_FALLBACK;
+             // usingPlatformToken remains false, as the platform token is invalid for this project.
+        } else {
+            // Priority 2: Fallback to platform config
             try {
                 const config = JSON.parse(PLATFORM_CONFIG_JSON);
-                // Check if the platform config is truly empty or invalid
                 if (Object.keys(config).length > 0 && config.apiKey && config.projectId) {
-                    console.log("CONFIG: Using platform-provided Firebase configuration.");
-                    return config;
+                    console.warn("CONFIG: Hardcoded config missing. Falling back to platform-provided configuration.");
+                    FIREBASE_CONFIG = config; 
+                    // Only use custom token if we are using the platform's configuration AND the token exists.
+                    usingPlatformToken = !!INITIAL_AUTH_TOKEN; 
                 }
-                console.warn("CONFIG: Platform configuration was empty/invalid. Using hardcoded fallback configuration provided by the user.");
-                return USER_CONFIG_FALLBACK;
             } catch (e) {
-                console.error("CONFIG ERROR: Failed to parse platform config. Using hardcoded fallback.", e);
-                return USER_CONFIG_FALLBACK;
+                console.error("CONFIG ERROR: Failed to parse platform config.", e);
             }
-        })();
+        }
+        
+        if (Object.keys(FIREBASE_CONFIG).length === 0) {
+            console.error("CONFIG ERROR: No valid Firebase configuration found.");
+        }
+
 
         // --- Constants ---
         const UPGRADES = [
@@ -796,12 +807,10 @@
                 console.log("FIREBASE INIT: SDKs initialized.");
 
                 // Step 1: Set up the Auth State Listener (CRITICAL)
-                // This is the source of truth for the user's logged-in status.
                 onAuthStateChanged(auth, (currentUser) => {
                     if (currentUser) {
                         userId = currentUser.uid;
                         console.log("AUTH STATE CHANGE: Successful, UID:", userId);
-                        // Start Firestore listeners ONLY when we have a confirmed UID
                         startFirestoreListeners();
                     } else {
                         userId = null;
@@ -810,7 +819,6 @@
                     authReady = true;
                     loading = false;
                     
-                    // Render the UI state based on readiness
                     if (hasJoined) {
                         renderApp();
                     } else {
@@ -819,11 +827,13 @@
                 });
 
                 // Step 2: Attempt Sign-In (using provided token or anonymously)
-                if (INITIAL_AUTH_TOKEN) {
-                    console.log("AUTH ATTEMPT: Signing in with provided custom token...");
+                // If usingPlatformToken is true, we use the custom token. Otherwise, we use anonymous sign-in 
+                // to avoid the 'auth/custom-token-mismatch' error with the hardcoded config.
+                if (usingPlatformToken) {
+                    console.log("AUTH ATTEMPT: Using platform config. Signing in with custom token...");
                     await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
                 } else if (!auth.currentUser) {
-                    console.log("AUTH ATTEMPT: Signing in anonymously (No custom token provided)...");
+                    console.log("AUTH ATTEMPT: Signing in anonymously (Using hardcoded config)...");
                     await signInAnonymously(auth);
                 }
                 // Note: The onAuthStateChanged listener handles the final state update after sign-in completes.
