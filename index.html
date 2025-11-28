@@ -18,6 +18,20 @@
         
         .font-retro { font-family: 'Press Start 2P', cursive; }
         
+        /* --- CRITICAL MOBILE SCROLL FIX --- */
+        /* Ensures the viewport height is correctly captured and scrolling is enabled on the main content */
+        html, body {
+            height: 100%; /* Use 100% to handle mobile viewport height changes better than 100vh */
+            margin: 0;
+            padding: 0;
+            /* Allow the main scroll to happen here if needed, but we target #app-container */
+        }
+        #app-container {
+            height: 100%; /* Make the app container fill the body */
+        }
+        /* ---------------------------------- */
+
+
         /* Custom Keyframes */
         @keyframes float-up {
           0% { transform: translateY(0); opacity: 1; }
@@ -82,8 +96,8 @@
         .cursor-crosshair-retro { cursor: crosshair; }
     </style>
 </head>
-<body class="bg-slate-950 text-lime-400 font-retro relative flex flex-col min-h-screen cursor-default">
-    <!-- FIX 1: Removed h-screen and overflow-hidden from body, relying on min-h-screen and content height -->
+<body class="bg-slate-950 text-lime-400 font-retro relative flex flex-col h-full cursor-default">
+    <!-- Body and App container now use h-full, managed by the CSS fix above -->
 
     <!-- Retro Overlay Container -->
     <div class="retro-overlay">
@@ -95,7 +109,7 @@
     <!-- Notification Container -->
     <div id="notification-container"></div>
 
-    <!-- Main Application Container -->
+    <!-- Main Application Container (h-full via CSS) -->
     <div id="app-container" class="flex-1 flex flex-col">
         <!-- Content will be injected here by JavaScript -->
         <div class="flex-1 flex items-center justify-center">
@@ -591,6 +605,7 @@
             const container = document.getElementById('left-panel');
             if (!container) return;
 
+            // Ensure this panel is scrollable on mobile too, but its content handles the internal scroll
             container.innerHTML = `
                 <div class="flex border-b border-lime-900 shrink-0">
                     <button 
@@ -651,7 +666,7 @@
                             <div class="text-[10px] text-lime-800">OWNED: ${count}</div>
                           </div>
                         </div>
-                        ${canAfford ? `<div class="absolute bottom-0 left-0 top-0 bg-lime-500/5 transition-all duration-500" style="width: ${progressWidth}%"></div>` : ''}
+                        ${!canAfford ? `<div class="absolute bottom-0 left-0 top-0 bg-lime-500/5 transition-all duration-500" style="width: ${progressWidth}%"></div>` : ''}
                     </button>
                 `;
             }).join('');
@@ -686,15 +701,14 @@
 
         const renderApp = () => {
             const container = document.getElementById('app-container');
-            // FIX 2: Removed 'overflow-hidden' on mobile to allow scrolling of the main content stack
-            container.className = 'relative z-10 flex-1 flex flex-col md:flex-row md:overflow-hidden';
+            // Allow the container to be a flex column on mobile, taking up all space
+            container.className = 'relative z-10 flex-1 flex flex-col md:flex-row md:h-full';
+            
+            // Note: The `<main>` element will now handle the scrolling on ALL devices
             container.innerHTML = `
                 ${renderHeader()}
-                <main class="relative z-10 flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
+                <main class="relative z-10 flex-1 flex flex-col md:flex-row overflow-y-auto retro-scrollbar">
                     
-                    <!-- Left Panel: Leaderboard & Chat -->
-                    <aside id="left-panel" class="hidden md:flex flex-col w-72 border-r-2 border-lime-900 bg-slate-900/50"></aside>
-
                     <!-- Center: The Game -->
                     <section class="flex-1 flex flex-col relative min-w-0">
                       
@@ -730,15 +744,10 @@
                         </button>
                       </div>
 
-                      <!-- Mobile Tabs Hint -->
-                      <div class="md:hidden p-2 text-center text-[10px] text-lime-800 border-t border-lime-900/30">
-                        Scroll down to access Upgrades and Chat panels.
-                      </div>
                     </section>
 
-                    <!-- Right Panel: Upgrades & Trophies -->
-                    <!-- FIX 3: Changed flex-1 h-1/2 to w-full on mobile so it stacks correctly without pushing content off screen -->
-                    <aside class="w-full md:w-80 md:flex-none border-t-2 md:border-t-0 md:border-l-2 border-lime-900 bg-slate-900/50 flex flex-col md:h-auto overflow-hidden">
+                    <!-- Right Panel: Upgrades & Trophies (Stacks right below center on mobile) -->
+                    <aside class="w-full md:w-80 md:flex-none border-t-2 md:border-t-0 md:border-l-2 border-lime-900 bg-slate-900/50 flex flex-col shrink-0">
                         <div class="flex border-b border-lime-900 shrink-0">
                             <button 
                               onclick="window.setRightTab('upgrades')"
@@ -753,9 +762,14 @@
                               <i data-lucide="Award" class="w-4 h-4"></i> TROPHIES
                             </button>
                         </div>
-                        <div id="right-panel-content" class="flex-1 overflow-y-auto p-4 space-y-3 pb-20 md:pb-4 retro-scrollbar">
+                        <div id="right-panel-content" class="flex-1 overflow-y-auto p-4 space-y-3 retro-scrollbar">
                             <!-- Content injected here -->
                         </div>
+                    </aside>
+
+                    <!-- Left Panel: Leaderboard & Chat (Stacks right below the right panel on mobile) -->
+                    <aside id="left-panel" class="w-full md:w-72 md:flex-none border-t-2 md:border-t-0 md:border-r-2 border-lime-900 bg-slate-900/50 flex flex-col shrink-0">
+                        <!-- Content injected by renderLeftPanel -->
                     </aside>
                 </main>
                 ${renderFooter()}
