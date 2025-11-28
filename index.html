@@ -138,7 +138,6 @@
         const PLATFORM_CONFIG_JSON = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
         
         // --- HARDCODED FALLBACK CONFIGURATION (PRIORITY CONFIG) ---
-        // This configuration is now prioritized as requested.
         const USER_CONFIG_FALLBACK = {
             apiKey: "AIzaSyBVxchWw1l9DO5vRTnkr9O_CviXhwsnWqs",
             authDomain: "ephemeralencrypt.firebaseapp.com",
@@ -156,7 +155,7 @@
         if (USER_CONFIG_FALLBACK.apiKey && USER_CONFIG_FALLBACK.projectId) {
              console.log("CONFIG: Prioritizing hardcoded user configuration as requested.");
              FIREBASE_CONFIG = USER_CONFIG_FALLBACK;
-             // usingPlatformToken remains false, as the platform token is invalid for this project.
+             // usingPlatformToken remains false to avoid auth/custom-token-mismatch
         } else {
             // Priority 2: Fallback to platform config
             try {
@@ -287,6 +286,21 @@
         };
 
         // --- Core Actions ---
+        
+        // NEW FUNCTION: Updates username and enables/disables the button
+        window.updateUsername = (value) => {
+            // Trim and limit length
+            username = value.trim().substring(0, 12);
+
+            // Directly update the button state based on current state
+            const button = document.getElementById('join-button');
+            if (button) {
+                // Button is disabled if username is empty OR auth is not ready OR userId is missing
+                const disableButton = !username.trim() || !authReady || !userId;
+                button.disabled = disableButton;
+            }
+        };
+
 
         window.handleClick = (event) => {
             const button = event.currentTarget;
@@ -330,13 +344,18 @@
         window.handleJoin = async (e) => {
             e.preventDefault();
             const input = document.getElementById('username-input');
-            const newUsername = input.value.trim();
-            if (!newUsername || !userId) {
+            const currentUsername = input.value.trim();
+            
+            // Re-validate just in case the button was force-enabled incorrectly
+            if (!currentUsername || !userId) {
                 console.warn("JOIN ATTEMPT FAILED: Username is empty or userId is missing.");
+                // Ensure UI reflects the error state temporarily
+                input.classList.add('border-red-500');
+                setTimeout(() => input.classList.remove('border-red-500'), 1000);
                 return;
             }
 
-            username = newUsername;
+            username = currentUsername.substring(0, 12);
             
             // Restore data if exists
             const existingData = leaderboard.find(p => p.id === userId);
@@ -402,6 +421,7 @@
         const renderLogin = () => {
             const container = document.getElementById('app-container');
             container.className = 'flex-1 flex items-center justify-center p-4';
+            // Calculate initial state for the button
             const disableButton = !username.trim() || !authReady || !userId;
 
             container.innerHTML = `
@@ -418,7 +438,7 @@
                         type="text"
                         id="username-input"
                         value="${username}"
-                        oninput="username = this.value.trim().substring(0, 12)"
+                        oninput="window.updateUsername(this.value)"
                         maxlength="12"
                         class="w-full bg-black border-2 border-lime-800 text-lime-400 p-4 focus:border-lime-400 focus:outline-none focus:shadow-[0_0_15px_rgba(163,230,53,0.3)] transition-all placeholder-lime-900"
                         placeholder="USER_NAME..."
@@ -444,11 +464,8 @@
                   </form>
                 </div>
             `;
-            // Manually re-enable button if auth state changes after initial render
-            const joinButton = document.getElementById('join-button');
-            if (joinButton) {
-                joinButton.disabled = disableButton;
-            }
+            // Manually update the button state after initial render to catch any state changes missed by the initial render
+            window.updateUsername(document.getElementById('username-input').value);
         };
 
         const renderLoader = () => {
@@ -531,16 +548,23 @@
         }
 
         const renderChat = () => {
-            let messagesHtml = chatMessages.map((msg, i) => `
-                <div class="break-words">
-                    <span class="text-[10px] text-lime-600 opacity-70">
-                        ${msg.username || 'Unknown'}:
-                    </span>
-                    <span class="text-xs text-lime-400 ml-2 block bg-lime-900/10 p-1 rounded border border-lime-900/20">
-                        ${msg.text}
-                    </span>
-                </div>
-            `).join('');
+            let messagesHtml = chatMessages.map((msg, i) => {
+                // Determine if timestamp is available and format it (if needed)
+                const time = msg.timestamp && msg.timestamp.toDate ? 
+                             msg.timestamp.toDate().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }) : 
+                             '--:--';
+
+                return `
+                    <div class="break-words">
+                        <span class="text-[8px] text-lime-700 opacity-70">
+                            [${time}] ${msg.username || 'Unknown'}:
+                        </span>
+                        <span class="text-xs text-lime-400 ml-2 block bg-lime-900/10 p-1 rounded border border-lime-900/20">
+                            ${msg.text}
+                        </span>
+                    </div>
+                `;
+            }).join('');
 
             return `
                 <div class="flex-1 flex flex-col overflow-hidden">
@@ -774,10 +798,13 @@
 
             // Chat Listener
             const chatRef = collection(db, getCollectionPath('chat'));
-            onSnapshot(query(chatRef), (snapshot) => {
+            // Query to order by timestamp
+            const q = query(chatRef); 
+            onSnapshot(q, (snapshot) => {
                 const messages = [];
                 snapshot.forEach(doc => messages.push({ id: doc.id, ...doc.data() }));
                 
+                // Client-side sort if Firestore ordering isn't explicitly used (avoids index errors)
                 messages.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
                 chatMessages = messages.slice(-50);
                 
@@ -819,6 +846,7 @@
                     authReady = true;
                     loading = false;
                     
+                    // Re-render to update the login screen and potentially enable the button
                     if (hasJoined) {
                         renderApp();
                     } else {
@@ -827,13 +855,11 @@
                 });
 
                 // Step 2: Attempt Sign-In (using provided token or anonymously)
-                // If usingPlatformToken is true, we use the custom token. Otherwise, we use anonymous sign-in 
-                // to avoid the 'auth/custom-token-mismatch' error with the hardcoded config.
-                if (usingPlatformToken) {
+                if (usingPlatformToken && INITIAL_AUTH_TOKEN) {
                     console.log("AUTH ATTEMPT: Using platform config. Signing in with custom token...");
                     await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
                 } else if (!auth.currentUser) {
-                    console.log("AUTH ATTEMPT: Signing in anonymously (Using hardcoded config)...");
+                    console.log("AUTH ATTEMPT: Signing in anonymously (Using hardcoded config or no platform token)...");
                     await signInAnonymously(auth);
                 }
                 // Note: The onAuthStateChanged listener handles the final state update after sign-in completes.
