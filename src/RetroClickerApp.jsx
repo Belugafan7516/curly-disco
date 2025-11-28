@@ -34,27 +34,28 @@ const UPGRADES = [
   { id: 'botnet', name: 'Global Botnet', cps: 5000, baseCost: 1000000, icon: <Globe size={16} /> },
 ];
 
+// Defining a type structure for condition argument to clarify the logic (no explicit TS type annotation used here)
+// (score, cps, inventory)
 const TROPHIES = [
-  { id: 'hello_world', name: 'Hello World', description: 'Click 1 time', condition: (s: number, c: number, i: any) => s >= 1 },
-  { id: 'script_kiddie', name: 'Script Kiddie', description: 'Reach 1,000 Bytes', condition: (s: number, c: number, i: any) => s >= 1000 },
-  { id: 'hacker', name: 'Hacker', description: 'Reach 100 CPS', condition: (s: number, c: number, i: any) => c >= 100 },
-  { id: 'sysadmin', name: 'Sysadmin', description: 'Own a Mainframe', condition: (s: number, c: number, i: any) => i['server'] >= 1 },
-  { id: 'singularity', name: 'Singularity', description: 'Reach 1M Bytes', condition: (s: number, c: number, i: any) => s >= 1000000 },
-  { id: 'overlord', name: 'Net Overlord', description: 'Reach 5,000 CPS', condition: (s: number, c: number, i: any) => c >= 5000 },
+  { id: 'hello_world', name: 'Hello World', description: 'Click 1 time', condition: (s, c, i) => s >= 1 },
+  { id: 'script_kiddie', name: 'Script Kiddie', description: 'Reach 1,000 Bytes', condition: (s, c, i) => s >= 1000 },
+  { id: 'hacker', name: 'Hacker', description: 'Reach 100 CPS', condition: (s, c, i) => c >= 100 },
+  { id: 'sysadmin', name: 'Sysadmin', description: 'Own a Mainframe', condition: (s, c, i) => i['server'] >= 1 },
+  { id: 'singularity', name: 'Singularity', description: 'Reach 1M Bytes', condition: (s, c, i) => s >= 1000000 },
+  { id: 'overlord', name: 'Net Overlord', description: 'Reach 5,000 CPS', condition: (s, c, i) => c >= 5000 },
 ];
 
 // --- Firebase Initialization (Global, then assigned in App) ---
 
-declare const __firebase_config: string | undefined;
-declare const __app_id: string | undefined;
-declare const __initial_auth_token: string | undefined;
+// Use window/global properties provided by the Canvas environment, falling back to safe defaults
+const initialAuthToken = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+const rawAppId = typeof window.__app_id !== 'undefined' ? window.__app_id : 'default-app-id';
+const firebaseConfigString = typeof window.__firebase_config !== 'undefined' ? window.__firebase_config : '{}';
 
 // FIX: Sanitize the appId to ensure it only contains a single segment, 
 // preventing the runtime environment's file path context from breaking Firestore's path rules.
-let rawAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 const appId = rawAppId.split('/')[0];
 
-const firebaseConfigString = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
 const firebaseConfig = JSON.parse(firebaseConfigString); 
 
 // Initialize Firebase services outside of the component to ensure single instantiation
@@ -69,13 +70,13 @@ try {
 }
 
 // --- Utility Functions ---
-const formatNumber = (num: number) => {
+const formatNumber = (num) => {
   if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
   if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
   return Math.floor(num).toString();
 };
 
-const calculateCost = (baseCost: number, count: number) => {
+const calculateCost = (baseCost, count) => {
   return Math.floor(baseCost * Math.pow(1.15, count));
 };
 
@@ -92,7 +93,8 @@ const RetroOverlay = () => (
   </div>
 );
 
-const Particle = ({ x, y, value, onComplete }: { x: number, y: number, value: number, onComplete: () => void }) => {
+// Removed explicit TS type annotation from props to ensure JSX compatibility
+const Particle = ({ x, y, value, onComplete }) => {
   useEffect(() => {
     const timer = setTimeout(onComplete, 1000);
     return () => clearTimeout(timer);
@@ -110,30 +112,30 @@ const Particle = ({ x, y, value, onComplete }: { x: number, y: number, value: nu
 
 export default function App() {
   // --- State ---
-  const [userId, setUserId] = useState<string | null>(null);
+  const [userId, setUserId] = useState(null);
   const [authReady, setAuthReady] = useState(false); // Flag to ensure auth is complete
-  const [username, setUsername] = useState<string>('');
+  const [username, setUsername] = useState('');
   const [hasJoined, setHasJoined] = useState(false);
   const [loading, setLoading] = useState(true);
   
   // Game State
   const [score, setScore] = useState(0);
   const [cps, setCps] = useState(0);
-  const [inventory, setInventory] = useState<Record<string, number>>({});
-  const [unlockedTrophies, setUnlockedTrophies] = useState<string[]>([]);
-  const [particles, setParticles] = useState<{id: number, x: number, y: number, value: number}[]>([]);
-  const [notification, setNotification] = useState<string | null>(null);
+  const [inventory, setInventory] = useState({}); // Use empty object for initial state
+  const [unlockedTrophies, setUnlockedTrophies] = useState([]);
+  const [particles, setParticles] = useState([]);
+  const [notification, setNotification] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date()); 
   
   // Multiplayer State
-  const [leaderboard, setLeaderboard] = useState<any[]>([]);
+  const [leaderboard, setLeaderboard] = useState([]);
   const [globalTotal, setGlobalTotal] = useState(0);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [chatMessages, setChatMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
 
   // UI State
-  const [leftTab, setLeftTab] = useState<'leaderboard' | 'chat'>('leaderboard');
-  const [rightTab, setRightTab] = useState<'upgrades' | 'trophies'>('upgrades');
+  const [leftTab, setLeftTab] = useState('leaderboard');
+  const [rightTab, setRightTab] = useState('upgrades');
 
   // Refs
   const scoreRef = useRef(score);
@@ -141,10 +143,10 @@ export default function App() {
   const inventoryRef = useRef(inventory);
   const trophiesRef = useRef(unlockedTrophies);
   const unsavedChanges = useRef(false);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef(null);
 
   // --- Firestore Path Helper ---
-  const getCollectionPath = useCallback((type: 'scores' | 'chat') => {
+  const getCollectionPath = useCallback((type) => {
     // Both scores and chat are public data collections
     return `artifacts/${appId}/public/data/${type}`;
   }, []);
@@ -152,8 +154,6 @@ export default function App() {
   // --- Auth & Initial Load ---
   useEffect(() => {
     if (!auth || !db) return;
-
-    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
     
     // Listener for Auth State Changes
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -181,7 +181,7 @@ export default function App() {
 
     attemptAuth();
     return () => unsubscribe(); // Cleanup auth listener
-  }, []);
+  }, []); // Empty dependency array means this runs once on mount
 
   // --- Sync References ---
   useEffect(() => { scoreRef.current = score; }, [score]);
@@ -197,23 +197,8 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // --- Game Loop (1s Interval) ---
-  useEffect(() => {
-    if (!hasJoined) return;
-
-    const interval = setInterval(() => {
-      if (cpsRef.current > 0) {
-        setScore(prev => prev + cpsRef.current);
-        unsavedChanges.current = true;
-      }
-      checkTrophies();
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [hasJoined]);
-
-  // --- Check Trophies ---
-  const checkTrophies = () => {
+  // --- Check Trophies (Wrapped in useCallback to be stable for game loop) ---
+  const checkTrophies = useCallback(() => {
     const currentScore = scoreRef.current;
     const currentCps = cpsRef.current;
     const currentInventory = inventoryRef.current;
@@ -234,10 +219,27 @@ export default function App() {
     });
 
     if (newUnlock) {
+      // Use setter to ensure state is updated
       setUnlockedTrophies(newTrophies);
       unsavedChanges.current = true;
     }
-  };
+    // Dependencies only include the setters to make this function stable
+  }, [setNotification, setUnlockedTrophies]);
+
+  // --- Game Loop (1s Interval) ---
+  useEffect(() => {
+    if (!hasJoined) return;
+
+    const interval = setInterval(() => {
+      if (cpsRef.current > 0) {
+        setScore(prev => prev + cpsRef.current);
+        unsavedChanges.current = true;
+      }
+      checkTrophies(); // Call the stable callback function
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [hasJoined, checkTrophies]); // checkTrophies is now a stable dependency
 
   // --- Firestore Sync (Debounced 2s) ---
   useEffect(() => {
@@ -299,6 +301,7 @@ export default function App() {
       
       // Auto-scroll chat to bottom
       if (chatContainerRef.current) {
+        // Use timeout to ensure the DOM has updated before scrolling
         setTimeout(() => {
            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }, 100);
