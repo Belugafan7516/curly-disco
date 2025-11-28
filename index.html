@@ -19,15 +19,13 @@
         .font-retro { font-family: 'Press Start 2P', cursive; }
         
         /* --- CRITICAL MOBILE SCROLL FIX --- */
-        /* Ensures the viewport height is correctly captured and scrolling is enabled on the main content */
         html, body {
-            height: 100%; /* Use 100% to handle mobile viewport height changes better than 100vh */
+            height: 100%; 
             margin: 0;
             padding: 0;
-            /* Allow the main scroll to happen here if needed, but we target #app-container */
         }
         #app-container {
-            height: 100%; /* Make the app container fill the body */
+            height: 100%; 
         }
         /* ---------------------------------- */
 
@@ -97,8 +95,6 @@
     </style>
 </head>
 <body class="bg-slate-950 text-lime-400 font-retro relative flex flex-col h-full cursor-default">
-    <!-- Body and App container now use h-full, managed by the CSS fix above -->
-
     <!-- Retro Overlay Container -->
     <div class="retro-overlay">
         <div class="scanlines"></div>
@@ -121,7 +117,7 @@
         // Import Firebase SDKs
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, onSnapshot, serverTimestamp, query, setLogLevel, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
         // --- Globals ---
         let app, db, auth;
@@ -281,7 +277,7 @@
 
         const syncData = async () => {
             if (!userId || !hasJoined || !db || !unsavedChanges) return;
-            console.log("SYNC: Attempting to save data for user:", userId);
+            // console.log("SYNC: Attempting to save data for user:", userId);
 
             try {
                 const userDocRef = doc(db, getCollectionPath('scores'), userId);
@@ -294,7 +290,7 @@
                     lastUpdated: serverTimestamp()
                 }, { merge: true });
                 unsavedChanges = false;
-                console.log("SYNC: Data saved successfully.");
+                // console.log("SYNC: Data saved successfully.");
             } catch (e) {
                 console.error("SYNC ERROR: Failed to save data.", e);
             }
@@ -325,7 +321,8 @@
 
             // Particle effect (simple version)
             const particleElement = document.createElement('div');
-            particleElement.className = 'absolute text-lime-400 font-bold pointer-events-none select-none animate-float-up text-xl z-20';
+            // Ensure the particle is positioned absolutely relative to the button container, not the viewport.
+            particleElement.className = 'absolute text-lime-400 font-bold pointer-events-none select-none animate-float-up text-xl z-20'; 
             particleElement.style.left = `${x}px`;
             particleElement.style.top = `${y}px`;
             particleElement.textContent = '+1';
@@ -361,10 +358,8 @@
             const input = document.getElementById('username-input');
             const currentUsername = input.value.trim();
             
-            // Re-validate just in case the button was force-enabled incorrectly
+            // Re-validate
             if (!currentUsername || !userId) {
-                console.warn("JOIN ATTEMPT FAILED: Username is empty or userId is missing.");
-                // Ensure UI reflects the error state temporarily
                 input.classList.add('border-red-500');
                 setTimeout(() => input.classList.remove('border-red-500'), 1000);
                 return;
@@ -372,7 +367,7 @@
 
             username = currentUsername.substring(0, 12);
             
-            // Restore data if exists
+            // Restore data if exists (using current leaderboard state, though the async fetch is more reliable on startup)
             const existingData = leaderboard.find(p => p.id === userId);
             if (existingData) {
                score = existingData.score || 0;
@@ -383,6 +378,10 @@
             
             hasJoined = true;
             unsavedChanges = true;
+            
+            // Initial save to mark them as joined
+            await syncData();
+
             renderApp();
             
             // Start loops after joining
@@ -498,8 +497,14 @@
              return `
                 <header class="relative z-10 border-b-2 border-lime-900 bg-slate-900/80 p-3 md:p-4 flex justify-between items-center backdrop-blur-sm shadow-lg shrink-0">
                     <div class="flex items-center gap-4">
-                      <div class="w-3 h-3 bg-lime-500 rounded-full animate-ping absolute" />
-                      <div class="w-3 h-3 bg-lime-500 rounded-full relative" />
+                      <!-- FIX 1: Use a dedicated relative container for status lights -->
+                      <div class="relative flex items-center justify-center w-4 h-4">
+                        <!-- Pinging outer glow (absolute) -->
+                        <div class="w-3 h-3 bg-lime-500 rounded-full absolute animate-ping opacity-75" />
+                        <!-- Stable inner light (relative) -->
+                        <div class="w-2 h-2 bg-lime-500 rounded-full relative animate-pulse" /> 
+                      </div>
+                      
                       <div>
                         <h1 class="text-lg md:text-xl text-lime-400 leading-none">SYS.LINK</h1>
                         <span class="text-[10px] text-lime-700">NODES: ${leaderboard.length}</span>
@@ -778,6 +783,39 @@
             renderLeftPanel();
             renderRightPanel();
             if (window.createIcons) window.createIcons();
+            
+            // Start the CPS and sync intervals if not running
+            if (!gameLoopInterval) {
+                gameLoopInterval = setInterval(gameLoop, 1000);
+            }
+            if (!syncInterval) {
+                syncInterval = setInterval(syncData, 2000);
+            }
+        };
+
+
+        // --- Firestore Data Fetch for Auto-Join ---
+
+        /** Fetches user data from Firestore to restore state on refresh. */
+        const fetchUserData = async (uid) => {
+            try {
+                const userDocRef = doc(db, getCollectionPath('scores'), uid);
+                // Use getDoc to fetch the latest state
+                const docSnap = await getDoc(userDocRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    score = data.score || 0;
+                    cps = data.cps || 0;
+                    inventory = data.inventory || {};
+                    unlockedTrophies = data.trophies || [];
+                    username = data.username || '';
+                    // If a record exists, they have joined before.
+                    hasJoined = true; 
+                    console.log("AUTH: Restored existing session for user:", username);
+                }
+            } catch (e) {
+                console.error("AUTH ERROR: Failed to fetch user data on startup.", e);
+            }
         };
 
         // --- Firebase Initialization and Auth ---
@@ -788,7 +826,7 @@
                 return;
             }
             
-            console.log("FIRESTORE: Starting listeners for User ID:", userId);
+            // console.log("FIRESTORE: Starting listeners for User ID:", userId);
 
             // Leaderboard Listener
             const scoresRef = collection(db, getCollectionPath('scores'));
@@ -805,33 +843,29 @@
                 globalTotal = total;
                 if (hasJoined) {
                     renderLeftPanel(); 
-                    document.getElementById('global-total-value').textContent = formatNumber(globalTotal) + ' PKTS';
+                    const totalElement = document.getElementById('global-total-value');
+                    if(totalElement) totalElement.textContent = formatNumber(globalTotal) + ' PKTS';
                 }
-                console.log(`FIRESTORE: Leaderboard updated (${players.length} nodes).`);
             }, (error) => {
-                // This is where security rule errors show up
-                console.error("FIRESTORE ERROR: Leaderboard snapshot failed (Likely Security Rules):", error.message);
+                console.error("FIRESTORE ERROR: Leaderboard snapshot failed:", error.message);
             });
 
             // Chat Listener
             const chatRef = collection(db, getCollectionPath('chat'));
-            // Query to order by timestamp
             const q = query(chatRef); 
             onSnapshot(q, (snapshot) => {
                 const messages = [];
                 snapshot.forEach(doc => messages.push({ id: doc.id, ...doc.data() }));
                 
-                // Client-side sort if Firestore ordering isn't explicitly used (avoids index errors)
+                // Client-side sort
                 messages.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0));
                 chatMessages = messages.slice(-50);
                 
                 if (hasJoined) {
                     renderLeftPanel(); 
                 }
-                console.log(`FIRESTORE: Chat updated (${chatMessages.length} messages).`);
             }, (error) => {
-                // This is where security rule errors show up
-                console.error("FIRESTORE ERROR: Chat snapshot failed (Likely Security Rules):", error.message);
+                console.error("FIRESTORE ERROR: Chat snapshot failed:", error.message);
             });
         };
 
@@ -850,41 +884,43 @@
                 setLogLevel('debug');
                 console.log("FIREBASE INIT: SDKs initialized.");
 
-                // Step 1: Set up the Auth State Listener (CRITICAL)
-                onAuthStateChanged(auth, (currentUser) => {
-                    if (currentUser) {
-                        userId = currentUser.uid;
-                        console.log("AUTH STATE CHANGE: Successful, UID:", userId);
-                        startFirestoreListeners();
-                    } else {
-                        userId = null;
-                        console.log("AUTH STATE CHANGE: No user signed in (Anonymous or failed).");
-                    }
-                    authReady = true;
-                    loading = false;
-                    
-                    // Re-render to update the login screen and potentially enable the button
-                    if (hasJoined) {
-                        renderApp();
-                    } else {
-                        renderLogin();
-                    }
+                // Step 1: Wait for Auth State to be ready and fetch user data
+                await new Promise(resolve => {
+                    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+                        if (currentUser) {
+                            userId = currentUser.uid;
+                            // FIX 2: Check for existing session immediately
+                            await fetchUserData(userId); 
+                            startFirestoreListeners();
+                        } else {
+                            userId = null;
+                        }
+
+                        authReady = true;
+                        loading = false;
+                        unsubscribe(); // Stop listening after the first stable state
+                        resolve();
+                    });
                 });
 
-                // Step 2: Attempt Sign-In (using provided token or anonymously)
+                // Step 2: Attempt Sign-In if required (if onAuthStateChanged didn't complete sign-in)
                 if (usingPlatformToken && INITIAL_AUTH_TOKEN) {
-                    console.log("AUTH ATTEMPT: Using platform config. Signing in with custom token...");
                     await signInWithCustomToken(auth, INITIAL_AUTH_TOKEN);
                 } else if (!auth.currentUser) {
-                    console.log("AUTH ATTEMPT: Signing in anonymously (Using hardcoded config or no platform token)...");
                     await signInAnonymously(auth);
                 }
-                // Note: The onAuthStateChanged listener handles the final state update after sign-in completes.
+                
+                // Step 3: Render the correct UI based on the state after all async operations
+                if (hasJoined) {
+                    renderApp();
+                } else {
+                    renderLogin();
+                }
 
             } catch (e) {
                 console.error("FATAL FIREBASE ERROR: Initialization or sign-in attempt failed.", e);
                 loading = false;
-                authReady = true; // Still ready, just failed
+                authReady = true; 
                 renderLogin();
             }
         };
